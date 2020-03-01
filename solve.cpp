@@ -28,6 +28,9 @@ using namespace std;
 #define ROW(rx, px, m) (rx < (px -(m%px)) ? m/px : m/px + 1) //get number of rows in the block
 #define COLUMN(ry, py, n) (ry < (py - (m%py)) ? m/py : m/py + 1) // get number of columns in the block
 
+#define ROW_INDEX(rx, px, m) (rx< (px -(m%px)) ? m/px*rx : m/px*rx+rx-(px-m%px)) // get number of start row index in the block
+#define COLUMN_INDEX(ry, py, n) (ry < (py-(n%py)) ? n/py*ry : n/py*ry+ry-(py-n%py)) // get number of start column index in the block
+
 void repNorms(double l2norm, double mx, double dt, int m,int n, int niter, int stats_freq);
 void stats(double *E, int m, int n, double *_mx, double *sumSq);
 double *alloc1D(int m,int n);
@@ -302,8 +305,13 @@ void solve_MPI(double **_E, double **_E_prev, double *R, double alpha, double dt
     __m128d dt_avx = _mm_set1_pd(dt);
     __m128d kk_avx = _mm_set1_pd(kk);
     __m128d epsilon_avx = _mm_set1_pd(epsilon);
-#endif
+    #endif
 
+    double *E_plot = NULL;
+    if (cb.plot_freq && (myrank==0))
+    {
+        E_plot = alloc1D(cb.m + 2, cb.n + 2);
+    }
 
     double *send_west_ghost = alloc1D(rows, 1); 
     double *recv_west_ghost = alloc1D(rows, 1); 
@@ -572,7 +580,50 @@ void solve_MPI(double **_E, double **_E_prev, double *R, double alpha, double dt
         {
                 if (!(niter % cb.plot_freq))
                 {
-                    plotter->updatePlot(E,  niter, m, n);
+                    if (myrank)
+                    {
+                        MPI_Request send_request[1];
+                        MPI_Status send_status[1];
+                        int dest = 0;
+                        MPI_Isend(E, rows * cols, MPI_DOUBLE, dest, 0, MPI_COMM_WORLD, &send_request[0]);
+                        MPI_Wait(&send_request[0], &send_status[0]);
+                    }
+                    else
+                    {
+                        for (int rank = nprocs-1; rank >=0 ; rank--)
+                        {
+                            if (rank)
+                            {
+                                rx = rank / py;
+                                ry = rank % py;
+                                rows = ROW(rx, px, m)+2; // 2 side ghost
+                                cols = COLUMN(ry, py, n)+2; // 2 side ghost
+                                double *subE_plot = alloc1D(rows, cols);
+                                MPI_Request recv_request[1];
+                                MPI_Status recv_status[1];
+                                int src = rank;
+                                MPI_Irecv(subE_plot, rows * cols, MPI_DOUBLE, src, 0, MPI_COMM_WORLD, &recv_request[0]);
+                                MPI_Wait(&recv_request[0], &recv_status[0]);
+                                int start_row = ROW_INDEX(rx, px, m); 
+                                int start_col = COLUMN_INDEX(ry, py, n);
+                                for (int i=0; i<rows; i++)
+                                    for (int j=0; j<cols; j++)
+                                    {
+                                        int index = (start_row+i)*(n+2)+(start_col+j); // cancel side effect 
+                                        E_plot[index] = subE_plot[i*cols+j];
+                                    }
+                            }
+                            else
+                            {
+                                for (int i = 0; i <rows; i++) 
+                                    for (int j = 0; j < cols; j++) 
+                                    {
+                                        E_plot[i*cols+j] = E[i*cols+j];
+                                    }
+                            }  
+                        }
+                        plotter->updatePlot(E_plot,  niter, m, n);
+                    }
                 }
             }
 
