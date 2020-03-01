@@ -36,8 +36,11 @@ void printMat2(const char mesg[], double *E, int m, int n);
 extern control_block cb;
 
 #ifdef SSE_VEC
+#define STEP 2
 /*If you intend to vectorize using SSE instructions, you must disable the compiler's auto-vectorizer*/
 __attribute__((optimize("no-tree-vectorize")))
+#else 
+#define STEP 1
 #endif 
 
 // The L2 norm of an array is computed by taking sum of the squares
@@ -54,7 +57,6 @@ void solve_single(double **_E, double **_E_prev, double *R, double alpha, double
 
  // Simulated time is different from the integer timestep number
  double t = 0.0;
-
  double *E = *_E, *E_prev = *_E_prev;
  double *R_tmp = R;
  double *E_tmp = *_E;
@@ -65,6 +67,19 @@ void solve_single(double **_E, double **_E_prev, double *R, double alpha, double
  int innerBlockRowStartIndex = (n+2)+1;
  int innerBlockRowEndIndex = (((m+2)*(n+2) - 1) - (n)) - (n+2);
 
+#ifdef SSE_VEC
+__m128d alpha_avx = _mm_set1_pd(alpha);
+__m128d four_avx = _mm_set1_pd(4);
+__m128d one_avx = _mm_set1_pd(1);
+__m128d minus_avx = _mm_set1_pd(-1);
+__m128d M1_avx = _mm_set1_pd(M1);
+__m128d M2_avx = _mm_set1_pd(M2);
+__m128d a_avx = _mm_set1_pd(a);
+__m128d b_avx = _mm_set1_pd(b);
+__m128d dt_avx = _mm_set1_pd(dt);
+__m128d kk_avx = _mm_set1_pd(kk);
+__m128d epsilon_avx = _mm_set1_pd(epsilon);
+#endif
 
  // We continue to sweep over the mesh until the simulation has reached
  // the desired number of iterations
@@ -117,24 +132,67 @@ void solve_single(double **_E, double **_E_prev, double *R, double alpha, double
 //////////////////////////////////////////////////////////////////////////////
 #ifdef FUSED
     // Solve for the excitation, a PDE
-    for(j = innerBlockRowStartIndex; j <= innerBlockRowEndIndex; j+=(n+2)) {
+    for(j = innerBlockRowStartIndex; j <= innerBlockRowEndIndex; j+=(n+2)) 
+    {
         E_tmp = E + j;
-	E_prev_tmp = E_prev + j;
+	    E_prev_tmp = E_prev + j;
         R_tmp = R + j;
-	for(i = 0; i < n; i++) {
-	    E_tmp[i] = E_prev_tmp[i]+alpha*(E_prev_tmp[i+1]+E_prev_tmp[i-1]-4*E_prev_tmp[i]+E_prev_tmp[i+(n+2)]+E_prev_tmp[i-(n+2)]);
+	    for(i = 0; i < n - n%STEP; i+=STEP) 
+        {
+            #ifdef SSE_VEC
+                __m128d EC_avx = _mm_loadu_pd(&E_prev_tmp[i]); //current
+                __m128d ET_avx = _mm_loadu_pd(&E_prev_tmp[i - (n+2)]); //top
+                __m128d EB_avx = _mm_loadu_pd(&E_prev_tmp[i + (n+2)]); //bottom
+                __m128d EL_avx = _mm_loadu_pd(&E_prev_tmp[i - 1]); //left
+                __m128d ER_avx = _mm_loadu_pd(&E_prev_tmp[i + 1]); //right
+                __m128d E_avx = _mm_add_pd(EC_avx, _mm_mul_pd(alpha_avx,
+                            _mm_sub_pd(_mm_add_pd(_mm_add_pd(ET_avx, EB_avx), _mm_add_pd(EL_avx, ER_avx)), _mm_mul_pd(four_avx, EC_avx))));
+                __m128d R_avx = _mm_loadu_pd(&R_tmp[i]);
+                E_avx = _mm_sub_pd(E_avx, _mm_mul_pd(dt_avx,_mm_add_pd(_mm_mul_pd(EC_avx, R_avx),
+                        _mm_mul_pd(_mm_mul_pd(_mm_sub_pd(EC_avx, a_avx),_mm_sub_pd(EC_avx, one_avx)),_mm_mul_pd(kk_avx, EC_avx)))));
+                R_avx = _mm_add_pd(R_avx,_mm_mul_pd(dt_avx,_mm_mul_pd(_mm_add_pd(epsilon_avx,
+                        _mm_div_pd(_mm_mul_pd(M1_avx, R_avx), _mm_add_pd(EC_avx, M2_avx))), _mm_sub_pd(_mm_mul_pd(minus_avx, R_avx),
+                        _mm_mul_pd(kk_avx, _mm_mul_pd(EC_avx, _mm_sub_pd(EC_avx, _mm_add_pd(b_avx, one_avx))))))));
+                _mm_storeu_pd(&E_tmp[i], E_avx);
+                _mm_storeu_pd(&R_tmp[i], R_avx);
+            #else
+	        E_tmp[i] = E_prev_tmp[i]+alpha*(E_prev_tmp[i+1]+E_prev_tmp[i-1]-4*E_prev_tmp[i]+E_prev_tmp[i+(n+2)]+E_prev_tmp[i-(n+2)]);
+            E_tmp[i] += -dt*(kk*E_prev_tmp[i]*(E_prev_tmp[i]-a)*(E_prev_tmp[i]-1)+E_prev_tmp[i]*R_tmp[i]);
+            R_tmp[i] += dt*(epsilon+M1* R_tmp[i]/( E_prev_tmp[i]+M2))*(-R_tmp[i]-kk*E_prev_tmp[i]*(E_prev_tmp[i]-b-1));
+            #endif
+        }
+        for (i=n-n%STEP; i<n; i++)
+        {
+            E_tmp[i] = E_prev_tmp[i]+alpha*(E_prev_tmp[i+1]+E_prev_tmp[i-1]-4*E_prev_tmp[i]+E_prev_tmp[i+(n+2)]+E_prev_tmp[i-(n+2)]);
             E_tmp[i] += -dt*(kk*E_prev_tmp[i]*(E_prev_tmp[i]-a)*(E_prev_tmp[i]-1)+E_prev_tmp[i]*R_tmp[i]);
             R_tmp[i] += dt*(epsilon+M1* R_tmp[i]/( E_prev_tmp[i]+M2))*(-R_tmp[i]-kk*E_prev_tmp[i]*(E_prev_tmp[i]-b-1));
         }
     }
 #else
     // Solve for the excitation, a PDE
-    for(j = innerBlockRowStartIndex; j <= innerBlockRowEndIndex; j+=(n+2)) {
+    for(j = innerBlockRowStartIndex; j <= innerBlockRowEndIndex; j+=(n+2)) 
+    {
         E_tmp = E + j;
-            E_prev_tmp = E_prev + j;
-            for(i = 0; i < n; i++) {
+        E_prev_tmp = E_prev + j;
+        for(i = 0; i < n-n%STEP; i+=STEP) 
+        {
+            #ifdef SSE_VEC
+                __m128d EC_avx = _mm_loadu_pd(&E_prev_tmp[i]);
+                __m128d ET_avx = _mm_loadu_pd(&E_prev_tmp[i - (n+2)]);
+                __m128d EB_avx = _mm_loadu_pd(&E_prev_tmp[i + (n+2)]);
+                __m128d EL_avx = _mm_loadu_pd(&E_prev_tmp[i - 1]);
+                __m128d ER_avx = _mm_loadu_pd(&E_prev_tmp[i + 1]);
+                __m128d E_avx = _mm_add_pd(EC_avx, _mm_mul_pd(alpha_avx, _mm_sub_pd(_mm_add_pd(_mm_add_pd(ET_avx, EB_avx),
+                                        _mm_add_pd(EL_avx, ER_avx)), _mm_mul_pd(four_avx, EC_avx))));
+            _mm_storeu_pd(&E_tmp[i], E_avx);
+            #else
                 E_tmp[i] = E_prev_tmp[i]+alpha*(E_prev_tmp[i+1]+E_prev_tmp[i-1]-4*E_prev_tmp[i]+E_prev_tmp[i+(n+2)]+E_prev_tmp[i-(n+2)]);
-            }
+            #endif
+        }
+        for (i = n-n%STEP; i<n; i++)
+        {
+            E_tmp[i] = E_prev_tmp[i]+alpha*(E_prev_tmp[i+1]+E_prev_tmp[i-1]-4*E_prev_tmp[i]+E_prev_tmp[i+(n+2)]+E_prev_tmp[i-(n+2)]);
+        }
     }
 
     /* 
@@ -142,13 +200,33 @@ void solve_single(double **_E, double **_E_prev, double *R, double alpha, double
      *     to the next timtestep
      */
 
-    for(j = innerBlockRowStartIndex; j <= innerBlockRowEndIndex; j+=(n+2)) {
+    for(j = innerBlockRowStartIndex; j <= innerBlockRowEndIndex; j+=(n+2)) 
+    {
         E_tmp = E + j;
         R_tmp = R + j;
-	E_prev_tmp = E_prev + j;
-        for(i = 0; i < n; i++) {
-	  E_tmp[i] += -dt*(kk*E_prev_tmp[i]*(E_prev_tmp[i]-a)*(E_prev_tmp[i]-1)+E_prev_tmp[i]*R_tmp[i]);
-	  R_tmp[i] += dt*(epsilon+M1* R_tmp[i]/( E_prev_tmp[i]+M2))*(-R_tmp[i]-kk*E_prev_tmp[i]*(E_prev_tmp[i]-b-1));
+	    E_prev_tmp = E_prev + j;
+        for(i = 0; i < n-n%STEP; i+=STEP) 
+        {
+            #ifdef SSE_VEC
+                __m128d E_avx = _mm_loadu_pd(&E_tmp[i]);
+                __m128d EC_avx = _mm_loadu_pd(&E_prev_tmp[i]);
+                __m128d R_avx = _mm_loadu_pd(&R_tmp[i]);
+                E_avx = _mm_sub_pd(E_avx,_mm_mul_pd(dt_avx,_mm_add_pd(_mm_mul_pd(EC_avx, R_avx),
+                _mm_mul_pd(_mm_mul_pd(_mm_sub_pd(EC_avx, a_avx),_mm_sub_pd(EC_avx, one_avx)),_mm_mul_pd(kk_avx, EC_avx)))));
+                R_avx = _mm_add_pd(R_avx,_mm_mul_pd(dt_avx,_mm_mul_pd(_mm_add_pd(epsilon_avx,_mm_div_pd(_mm_mul_pd(M1_avx, R_avx),
+                                    _mm_add_pd(EC_avx, M2_avx))),_mm_sub_pd(_mm_mul_pd(minus_avx, R_avx),
+                                    _mm_mul_pd(kk_avx,_mm_mul_pd(EC_avx,_mm_sub_pd(EC_avx, _mm_add_pd(b_avx, one_avx))))))));
+                _mm_storeu_pd(&E_tmp[i], E_avx);
+                _mm_storeu_pd(&R_tmp[i], R_avx);
+            #else
+                E_tmp[i] += -dt*(kk*E_prev_tmp[i]*(E_prev_tmp[i]-a)*(E_prev_tmp[i]-1)+E_prev_tmp[i]*R_tmp[i]);
+                R_tmp[i] += dt*(epsilon+M1* R_tmp[i]/( E_prev_tmp[i]+M2))*(-R_tmp[i]-kk*E_prev_tmp[i]*(E_prev_tmp[i]-b-1));
+            #endif
+        }
+        for (i=n-n%STEP; i<n; i++)
+        {
+            E_tmp[i] += -dt*(kk*E_prev_tmp[i]*(E_prev_tmp[i]-a)*(E_prev_tmp[i]-1)+E_prev_tmp[i]*R_tmp[i]);
+            R_tmp[i] += dt*(epsilon+M1* R_tmp[i]/( E_prev_tmp[i]+M2))*(-R_tmp[i]-kk*E_prev_tmp[i]*(E_prev_tmp[i]-b-1));
         }
     }
 #endif
@@ -211,6 +289,21 @@ void solve_MPI(double **_E, double **_E_prev, double *R, double alpha, double dt
 
     int innerBlockRowStartIndex = cols+1;
     int innerBlockRowEndIndex = (rows*cols - 1)- (cols-2) -(cols);
+
+    #ifdef SSE_VEC
+    __m128d alpha_avx = _mm_set1_pd(alpha);
+    __m128d four_avx = _mm_set1_pd(4);
+    __m128d one_avx = _mm_set1_pd(1);
+    __m128d minus_avx = _mm_set1_pd(-1);
+    __m128d M1_avx = _mm_set1_pd(M1);
+    __m128d M2_avx = _mm_set1_pd(M2);
+    __m128d a_avx = _mm_set1_pd(a);
+    __m128d b_avx = _mm_set1_pd(b);
+    __m128d dt_avx = _mm_set1_pd(dt);
+    __m128d kk_avx = _mm_set1_pd(kk);
+    __m128d epsilon_avx = _mm_set1_pd(epsilon);
+#endif
+
 
     double *send_west_ghost = alloc1D(rows, 1); 
     double *recv_west_ghost = alloc1D(rows, 1); 
@@ -371,20 +464,59 @@ void solve_MPI(double **_E, double **_E_prev, double *R, double alpha, double dt
         E_tmp = E + j;
 	    E_prev_tmp = E_prev + j;
         R_tmp = R + j;
-	    for(i = 0; i < cols-2; i++) 
+	    for(i = 0; i < (cols-2)-(cols-2)%STEP; i+=STEP) 
         {
-	        E_tmp[i] = E_prev_tmp[i]+alpha*(E_prev_tmp[i+1]+E_prev_tmp[i-1]-4*E_prev_tmp[i]+E_prev_tmp[i+cols]+E_prev_tmp[i-cols]);
+            #ifdef SSE_VEC
+                __m128d EC_avx = _mm_loadu_pd(&E_prev_tmp[i]); //current
+                __m128d ET_avx = _mm_loadu_pd(&E_prev_tmp[i - cols]); //top
+                __m128d EB_avx = _mm_loadu_pd(&E_prev_tmp[i + cols]); //bottom
+                __m128d EL_avx = _mm_loadu_pd(&E_prev_tmp[i - 1]); //left
+                __m128d ER_avx = _mm_loadu_pd(&E_prev_tmp[i + 1]); //right
+                __m128d E_avx = _mm_add_pd(EC_avx, _mm_mul_pd(alpha_avx,
+                            _mm_sub_pd(_mm_add_pd(_mm_add_pd(ET_avx, EB_avx), _mm_add_pd(EL_avx, ER_avx)), _mm_mul_pd(four_avx, EC_avx))));
+                __m128d R_avx = _mm_loadu_pd(&R_tmp[i]);
+                E_avx = _mm_sub_pd(E_avx, _mm_mul_pd(dt_avx,_mm_add_pd(_mm_mul_pd(EC_avx, R_avx),
+                        _mm_mul_pd(_mm_mul_pd(_mm_sub_pd(EC_avx, a_avx),_mm_sub_pd(EC_avx, one_avx)),_mm_mul_pd(kk_avx, EC_avx)))));
+                R_avx = _mm_add_pd(R_avx,_mm_mul_pd(dt_avx,_mm_mul_pd(_mm_add_pd(epsilon_avx,
+                        _mm_div_pd(_mm_mul_pd(M1_avx, R_avx), _mm_add_pd(EC_avx, M2_avx))), _mm_sub_pd(_mm_mul_pd(minus_avx, R_avx),
+                        _mm_mul_pd(kk_avx, _mm_mul_pd(EC_avx, _mm_sub_pd(EC_avx, _mm_add_pd(b_avx, one_avx))))))));
+                _mm_storeu_pd(&E_tmp[i], E_avx);
+                _mm_storeu_pd(&R_tmp[i], R_avx);
+            #else
+                E_tmp[i] = E_prev_tmp[i]+alpha*(E_prev_tmp[i+1]+E_prev_tmp[i-1]-4*E_prev_tmp[i]+E_prev_tmp[i+cols]+E_prev_tmp[i-cols]);
+                E_tmp[i] += -dt*(kk*E_prev_tmp[i]*(E_prev_tmp[i]-a)*(E_prev_tmp[i]-1)+E_prev_tmp[i]*R_tmp[i]);
+                R_tmp[i] += dt*(epsilon+M1* R_tmp[i]/( E_prev_tmp[i]+M2))*(-R_tmp[i]-kk*E_prev_tmp[i]*(E_prev_tmp[i]-b-1));
+            #endif
+        }
+        for (i=(cols-2)-(cols-2)%STEP; i<cols-2; i++)
+        {
+            E_tmp[i] = E_prev_tmp[i]+alpha*(E_prev_tmp[i+1]+E_prev_tmp[i-1]-4*E_prev_tmp[i]+E_prev_tmp[i+cols]+E_prev_tmp[i-cols]);
             E_tmp[i] += -dt*(kk*E_prev_tmp[i]*(E_prev_tmp[i]-a)*(E_prev_tmp[i]-1)+E_prev_tmp[i]*R_tmp[i]);
             R_tmp[i] += dt*(epsilon+M1* R_tmp[i]/( E_prev_tmp[i]+M2))*(-R_tmp[i]-kk*E_prev_tmp[i]*(E_prev_tmp[i]-b-1));
         }
     }
 #else
     // Solve for the excitation, a PDE
-    for(j = innerBlockRowStartIndex; j <= innerBlockRowEndIndex; j+=cols 
+    for(j = innerBlockRowStartIndex; j <= innerBlockRowEndIndex; j+=cols) 
     {
         E_tmp = E + j;
         E_prev_tmp = E_prev + j;
-        for(i = 0; i < n; i++) 
+        for(i = 0; i < (cols-2)-(cols-2)%STEP; i+=STEP) 
+        {
+            #ifdef SSE_VEC
+                __m128d EC_avx = _mm_loadu_pd(&E_prev_tmp[i]);
+                __m128d ET_avx = _mm_loadu_pd(&E_prev_tmp[i - cols]);
+                __m128d EB_avx = _mm_loadu_pd(&E_prev_tmp[i + cols]);
+                __m128d EL_avx = _mm_loadu_pd(&E_prev_tmp[i - 1]);
+                __m128d ER_avx = _mm_loadu_pd(&E_prev_tmp[i + 1]);
+                __m128d E_avx = _mm_add_pd(EC_avx, _mm_mul_pd(alpha_avx, _mm_sub_pd(_mm_add_pd(_mm_add_pd(ET_avx, EB_avx),
+                                        _mm_add_pd(EL_avx, ER_avx)), _mm_mul_pd(four_avx, EC_avx))));
+            _mm_storeu_pd(&E_tmp[i], E_avx);
+            #else
+                E_tmp[i] = E_prev_tmp[i]+alpha*(E_prev_tmp[i+1]+E_prev_tmp[i-1]-4*E_prev_tmp[i]+E_prev_tmp[i+cols]+E_prev_tmp[i-cols]);
+            #endif
+        }
+        for (i= (cols-2)-(cols-2)%STEP; i<cols-2; i++)
         {
             E_tmp[i] = E_prev_tmp[i]+alpha*(E_prev_tmp[i+1]+E_prev_tmp[i-1]-4*E_prev_tmp[i]+E_prev_tmp[i+cols]+E_prev_tmp[i-cols]);
         }
@@ -399,7 +531,25 @@ void solve_MPI(double **_E, double **_E_prev, double *R, double alpha, double dt
         E_tmp = E + j;
         R_tmp = R + j;
 	    E_prev_tmp = E_prev + j;
-        for(i = 0; i < n; i++) 
+        for(i = 0; i < (cols-2)-(cols-2)%STEP; i+=STEP) 
+        {
+            #ifdef SSE_VEC
+                __m128d E_avx = _mm_loadu_pd(&E_tmp[i]);
+                __m128d EC_avx = _mm_loadu_pd(&E_prev_tmp[i]);
+                __m128d R_avx = _mm_loadu_pd(&R_tmp[i]);
+                E_avx = _mm_sub_pd(E_avx,_mm_mul_pd(dt_avx,_mm_add_pd(_mm_mul_pd(EC_avx, R_avx),
+                _mm_mul_pd(_mm_mul_pd(_mm_sub_pd(EC_avx, a_avx),_mm_sub_pd(EC_avx, one_avx)),_mm_mul_pd(kk_avx, EC_avx)))));
+                R_avx = _mm_add_pd(R_avx,_mm_mul_pd(dt_avx,_mm_mul_pd(_mm_add_pd(epsilon_avx,_mm_div_pd(_mm_mul_pd(M1_avx, R_avx),
+                                    _mm_add_pd(EC_avx, M2_avx))),_mm_sub_pd(_mm_mul_pd(minus_avx, R_avx),
+                                    _mm_mul_pd(kk_avx,_mm_mul_pd(EC_avx,_mm_sub_pd(EC_avx, _mm_add_pd(b_avx, one_avx))))))));
+                _mm_storeu_pd(&E_tmp[i], E_avx);
+                _mm_storeu_pd(&R_tmp[i], R_avx);
+            #else
+                E_tmp[i] += -dt*(kk*E_prev_tmp[i]*(E_prev_tmp[i]-a)*(E_prev_tmp[i]-1)+E_prev_tmp[i]*R_tmp[i]);
+                R_tmp[i] += dt*(epsilon+M1* R_tmp[i]/( E_prev_tmp[i]+M2))*(-R_tmp[i]-kk*E_prev_tmp[i]*(E_prev_tmp[i]-b-1));
+            #endif
+        }
+        for (i= (cols-2)-(cols-2)%STEP; i<cols-2; i++)
         {
             E_tmp[i] += -dt*(kk*E_prev_tmp[i]*(E_prev_tmp[i]-a)*(E_prev_tmp[i]-1)+E_prev_tmp[i]*R_tmp[i]);
             R_tmp[i] += dt*(epsilon+M1* R_tmp[i]/( E_prev_tmp[i]+M2))*(-R_tmp[i]-kk*E_prev_tmp[i]*(E_prev_tmp[i]-b-1));
