@@ -39,6 +39,7 @@ endif
 ifeq ($(vec),1)
 C++FLAGS += -DSSE_VEC
 C++FLAGS += -msse -msse2
+C++FLAGS += -mavx
 #C++FLAGS += -ftree-vectorize -ftree-vectorizer-verbose=2 -march=native -DSSE_VEC
 endif
 
