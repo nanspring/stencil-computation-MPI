@@ -590,35 +590,39 @@ void solve_MPI(double **_E, double **_E_prev, double *R, double alpha, double dt
                     }
                     else
                     {
-                        for (int rank = nprocs-1; rank >=0 ; rank--)
+                        for (int tmp_rank = nprocs-1; tmp_rank >=0 ; tmp_rank--)
                         {
-                            if (rank)
+                            if (tmp_rank)
                             {
-                                rx = rank / py;
-                                ry = rank % py;
-                                rows = ROW(rx, px, m)+2; // 2 side ghost
-                                cols = COLUMN(ry, py, n)+2; // 2 side ghost
-                                double *subE_plot = alloc1D(rows, cols);
+                                int tmp_rx = tmp_rank / py;
+                                int tmp_ry = tmp_rank % py;
+                                int tmp_rows = ROW(tmp_rx, px, m)+2; // 2 side ghost
+                                int tmp_cols = COLUMN(tmp_ry, py, n)+2; // 2 side ghost
+                                double *subE_plot = alloc1D(tmp_rows, tmp_cols);
                                 MPI_Request recv_request[1];
                                 MPI_Status recv_status[1];
-                                int src = rank;
-                                MPI_Irecv(subE_plot, rows * cols, MPI_DOUBLE, src, 0, MPI_COMM_WORLD, &recv_request[0]);
+                                int src = tmp_rank;
+                                MPI_Irecv(subE_plot, tmp_rows * tmp_cols, MPI_DOUBLE, src, 0, MPI_COMM_WORLD, &recv_request[0]);
                                 MPI_Wait(&recv_request[0], &recv_status[0]);
-                                int start_row = ROW_INDEX(rx, px, m); 
-                                int start_col = COLUMN_INDEX(ry, py, n);
-                                for (int i=0; i<rows; i++)
-                                    for (int j=0; j<cols; j++)
+                                int start_row = ROW_INDEX(tmp_rx, px, m); 
+                                int start_col = COLUMN_INDEX(tmp_ry, py, n);
+                                int i_start = (tmp_rx==0) ? 0 : 1;
+                                int j_start = (tmp_ry==0) ? 0 : 1;
+                                int i_stop = (tmp_rx==px-1) ? tmp_rows : tmp_rows-1;
+                                int j_stop = (tmp_ry==py-1) ? tmp_cols : tmp_cols-1;
+                                for (int i=i_start; i<i_stop; i++)
+                                    for (int j=j_start; j<j_stop; j++)
                                     {
                                         int index = (start_row+i)*(n+2)+(start_col+j); // cancel side effect 
-                                        E_plot[index] = subE_plot[i*cols+j];
+                                        E_plot[index] = subE_plot[i*tmp_cols+j];
                                     }
                             }
                             else
                             {
-                                for (int i = 0; i <rows; i++) 
-                                    for (int j = 0; j < cols; j++) 
+                                for (int i = 0; i <rows-1; i++) 
+                                    for (int j = 0; j < cols-1; j++) 
                                     {
-                                        E_plot[i*cols+j] = E[i*cols+j];
+                                        E_plot[i*(n+2)+j] = E[i*cols+j];
                                     }
                             }  
                         }
