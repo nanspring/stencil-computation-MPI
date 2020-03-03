@@ -291,7 +291,7 @@ void solve_MPI(double **_E, double **_E_prev, double *R, double alpha, double dt
     cols = COLUMN(ry, py, n)+2; // 2 side ghost
 
     int innerBlockRowStartIndex = cols+1;
-    int innerBlockRowEndIndex = (rows*cols - 1)- (cols-2) -(cols);
+    int innerBlockRowEndIndex = rows*cols -2*cols+1;
 
     #ifdef SSE_VEC
     __m128d alpha_avx = _mm_set1_pd(alpha);
@@ -356,9 +356,9 @@ void solve_MPI(double **_E, double **_E_prev, double *R, double alpha, double dt
             if (ry<py-1)
             {
                 int dest = myrank+1;
-                for (index = cols; index < cols * rows; index += cols) 
+                for (index = cols-2; index < cols * rows; index += cols) 
                 {
-                    send_east_ghost[(index-cols)/cols] = E_prev[index];
+                    send_east_ghost[(index-cols+2)/cols] = E_prev[index];
                 }
                 MPI_Isend(send_east_ghost, rows, MPI_DOUBLE, dest, 0, MPI_COMM_WORLD, &send_request[1]);
 
@@ -369,7 +369,7 @@ void solve_MPI(double **_E, double **_E_prev, double *R, double alpha, double dt
             if (rx > 0) 
             {
                 int dest =  myrank - py;
-                MPI_Isend(E_prev + innerBlockRowStartIndex - 1, cols, MPI_DOUBLE, dest, 0, MPI_COMM_WORLD, &send_request[2]);
+                MPI_Isend(E_prev + cols, cols, MPI_DOUBLE, dest, 0, MPI_COMM_WORLD, &send_request[2]);
 
                 int src = myrank - py;
                 MPI_Irecv(E_prev, cols, MPI_DOUBLE, src, 0, MPI_COMM_WORLD, &recv_request[2]);
@@ -380,13 +380,14 @@ void solve_MPI(double **_E, double **_E_prev, double *R, double alpha, double dt
             if (rx < px-1) 
             {
                 int src = myrank + py;
-                MPI_Irecv(E_prev + (innerBlockRowEndIndex-1) + cols, cols, MPI_DOUBLE, src, 0, MPI_COMM_WORLD, &recv_request[3]);
+                MPI_Irecv(E_prev + rows * cols -cols, cols, MPI_DOUBLE, src, 0, MPI_COMM_WORLD, &recv_request[3]);
                 
 
                 int dest = myrank + py;
-                MPI_Isend(E_prev + innerBlockRowEndIndex - 1, cols, MPI_DOUBLE, dest, 0, MPI_COMM_WORLD, &send_request[3]);
+                MPI_Isend(E_prev + rows * cols - 2*cols, cols, MPI_DOUBLE, dest, 0, MPI_COMM_WORLD, &send_request[3]);
             }
 
+            //wait must be in order as above
             // west wait
             if (ry > 0) 
             {
@@ -396,8 +397,8 @@ void solve_MPI(double **_E, double **_E_prev, double *R, double alpha, double dt
             // east wait
             if (ry < py-1) 
             {
-                MPI_Wait(&recv_request[1], &recv_status[1]);
                 MPI_Wait(&send_request[1], &send_status[1]);
+                MPI_Wait(&recv_request[1], &recv_status[1]);
             }
 
             // north wait
@@ -410,8 +411,8 @@ void solve_MPI(double **_E, double **_E_prev, double *R, double alpha, double dt
             // south wait
             if (rx < px-1) 
             {
-                MPI_Wait(&send_request[3], &send_status[3]);
                 MPI_Wait(&recv_request[3], &recv_status[3]);
+                MPI_Wait(&send_request[3], &send_status[3]);
             }
 
             // west fill
@@ -636,13 +637,13 @@ void solve_MPI(double **_E, double **_E_prev, double *R, double alpha, double dt
     } //end of 'niter' loop at the beginning
 
   //  printMat2("Rank 0 Matrix E_prev", E_prev, m,n);  // return the L2 and infinity norms via in-out parameters
-
-    stats(E_prev,m,n,&Linf,&sumSq);
+    stats(E_prev,rows-2,cols-2,&Linf,&sumSq);
     if (noComm)
     {
         //do nothing
     }
     else{
+            MPI_Barrier(MPI_COMM_WORLD);
             double _Linf, _sumSq;
             MPI_Reduce(&Linf, &_Linf, 1, MPI_DOUBLE, MPI_MAX, root, MPI_COMM_WORLD);
             MPI_Reduce(&sumSq, &_sumSq, 1, MPI_DOUBLE, MPI_SUM, root, MPI_COMM_WORLD);
