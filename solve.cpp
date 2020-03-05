@@ -1,11 +1,3 @@
-/* 
- * Solves the Aliev-Panfilov model  using an explicit numerical scheme.
- * Based on code orginally provided by Xing Cai, Simula Research Laboratory
- * 
- * Modified and  restructured by Scott B. Baden, UCSD
- * 
- */
-
 #include <assert.h>
 #include <stdlib.h>
 #include <iostream>
@@ -17,7 +9,6 @@
 #include "Plotting.h"
 #include "cblock.h"
 #include <emmintrin.h>
-#include <immintrin.h>
 
 #ifdef _MPI_
 #include <mpi.h>
@@ -28,6 +19,9 @@ using namespace std;
 #define FUSED 1
 #define ROW(rx, px, m) (rx < (px -(m%px)) ? m/px : m/px + 1) //get number of rows in the block
 #define COLUMN(ry, py, n) (ry < (py - (m%py)) ? m/py : m/py + 1) // get number of columns in the block
+
+#define ROW_INDEX(rx, px, m) (rx< (px -(m%px)) ? m/px*rx : m/px*rx+rx-(px-m%px)) // get number of start row index in the block
+#define COLUMN_INDEX(ry, py, n) (ry < (py-(n%py)) ? n/py*ry : n/py*ry+ry-(py-n%py)) // get number of start column index in the block
 
 void repNorms(double l2norm, double mx, double dt, int m,int n, int niter, int stats_freq);
 void stats(double *E, int m, int n, double *_mx, double *sumSq);
@@ -54,6 +48,80 @@ double L2Norm(double sumSq){
     return l2norm;
 }
 
+void solve_north_south(int start_idx, int end_idx, int cols, double *E_tmp, double *R_tmp, double *E_prev_tmp, double *E ,double *R, double *E_prev, double dt){
+    int i,j;
+    printf("solve noth south from %d to %d\n",start_idx,end_idx);
+    for(j = start_idx; j < end_idx; j+=cols) 
+    {
+        
+        E_tmp = E + j;
+        R_tmp = R + j;
+	    E_prev_tmp = E_prev + j;
+        for(i = 0; i < (cols-2)-(cols-2)%STEP; i+=STEP) 
+        {
+            
+            #ifdef SSE_VEC
+                __m128d E_avx = _mm_loadu_pd(&E_tmp[i]);
+                __m128d EC_avx = _mm_loadu_pd(&E_prev_tmp[i]);
+                __m128d R_avx = _mm_loadu_pd(&R_tmp[i]);
+                E_avx = _mm_sub_pd(E_avx,_mm_mul_pd(dt_avx,_mm_add_pd(_mm_mul_pd(EC_avx, R_avx),
+                _mm_mul_pd(_mm_mul_pd(_mm_sub_pd(EC_avx, a_avx),_mm_sub_pd(EC_avx, one_avx)),_mm_mul_pd(kk_avx, EC_avx)))));
+                R_avx = _mm_add_pd(R_avx,_mm_mul_pd(dt_avx,_mm_mul_pd(_mm_add_pd(epsilon_avx,_mm_div_pd(_mm_mul_pd(M1_avx, R_avx),
+                                    _mm_add_pd(EC_avx, M2_avx))),_mm_sub_pd(_mm_mul_pd(minus_avx, R_avx),
+                                    _mm_mul_pd(kk_avx,_mm_mul_pd(EC_avx,_mm_sub_pd(EC_avx, _mm_add_pd(b_avx, one_avx))))))));
+                _mm_storeu_pd(&E_tmp[i], E_avx);
+                _mm_storeu_pd(&R_tmp[i], R_avx);
+            #else
+                E_tmp[i] += -dt*(kk*E_prev_tmp[i]*(E_prev_tmp[i]-a)*(E_prev_tmp[i]-1)+E_prev_tmp[i]*R_tmp[i]);
+                R_tmp[i] += dt*(epsilon+M1* R_tmp[i]/( E_prev_tmp[i]+M2))*(-R_tmp[i]-kk*E_prev_tmp[i]*(E_prev_tmp[i]-b-1));
+                printf("|%d|",E_tmp[i]);
+            #endif
+        }
+        for (i= (cols-2)-(cols-2)%STEP; i<cols-2; i++)
+        {
+            E_tmp[i] += -dt*(kk*E_prev_tmp[i]*(E_prev_tmp[i]-a)*(E_prev_tmp[i]-1)+E_prev_tmp[i]*R_tmp[i]);
+            R_tmp[i] += dt*(epsilon+M1* R_tmp[i]/( E_prev_tmp[i]+M2))*(-R_tmp[i]-kk*E_prev_tmp[i]*(E_prev_tmp[i]-b-1));
+            printf("[%d]",E_tmp[i]);
+        }
+        printf("\n");
+    }
+}
+
+void solve_east_west(int start_idx, int end_idx, int cols, double *E_tmp, double *R_tmp, double *E_prev_tmp, double *E ,double *R, double *E_prev,int dt, int alpha){
+    int i,j;
+    printf("solve east west from %d to %d\n",start_idx,end_idx);
+    for(j = start_idx; j <= end_idx; j+=cols) 
+    {
+        
+        E_tmp = E + j;
+        R_tmp = R + j;
+	    E_prev_tmp = E_prev + j;
+        for(i = 0; i < 1; i+=STEP) 
+        {
+            
+            #ifdef SSE_VEC
+                __m128d E_avx = _mm_loadu_pd(&E_tmp[i]);
+                __m128d EC_avx = _mm_loadu_pd(&E_prev_tmp[i]);
+                __m128d R_avx = _mm_loadu_pd(&R_tmp[i]);
+                E_avx = _mm_sub_pd(E_avx,_mm_mul_pd(dt_avx,_mm_add_pd(_mm_mul_pd(EC_avx, R_avx),
+                _mm_mul_pd(_mm_mul_pd(_mm_sub_pd(EC_avx, a_avx),_mm_sub_pd(EC_avx, one_avx)),_mm_mul_pd(kk_avx, EC_avx)))));
+                R_avx = _mm_add_pd(R_avx,_mm_mul_pd(dt_avx,_mm_mul_pd(_mm_add_pd(epsilon_avx,_mm_div_pd(_mm_mul_pd(M1_avx, R_avx),
+                                    _mm_add_pd(EC_avx, M2_avx))),_mm_sub_pd(_mm_mul_pd(minus_avx, R_avx),
+                                    _mm_mul_pd(kk_avx,_mm_mul_pd(EC_avx,_mm_sub_pd(EC_avx, _mm_add_pd(b_avx, one_avx))))))));
+                _mm_storeu_pd(&E_tmp[i], E_avx);
+                _mm_storeu_pd(&R_tmp[i], R_avx);
+            #else
+                E_tmp[i] += -dt*(kk*E_prev_tmp[i]*(E_prev_tmp[i]-a)*(E_prev_tmp[i]-1)+E_prev_tmp[i]*R_tmp[i]);
+                R_tmp[i] += dt*(epsilon+M1* R_tmp[i]/( E_prev_tmp[i]+M2))*(-R_tmp[i]-kk*E_prev_tmp[i]*(E_prev_tmp[i]-b-1));
+            #endif
+        }
+        for (i= (cols-2)-(cols-2)%STEP; i<1; i++)
+        {
+            E_tmp[i] += -dt*(kk*E_prev_tmp[i]*(E_prev_tmp[i]-a)*(E_prev_tmp[i]-1)+E_prev_tmp[i]*R_tmp[i]);
+            R_tmp[i] += dt*(epsilon+M1* R_tmp[i]/( E_prev_tmp[i]+M2))*(-R_tmp[i]-kk*E_prev_tmp[i]*(E_prev_tmp[i]-b-1));
+        }
+    }
+}
 void solve_single(double **_E, double **_E_prev, double *R, double alpha, double dt, Plotter *plotter, double &L2, double &Linf){
 
  // Simulated time is different from the integer timestep number
@@ -68,19 +136,19 @@ void solve_single(double **_E, double **_E_prev, double *R, double alpha, double
  int innerBlockRowStartIndex = (n+2)+1;
  int innerBlockRowEndIndex = (((m+2)*(n+2) - 1) - (n)) - (n+2);
 
-#ifdef SSE_VEC
-__m256d alpha_avx = _mm256_set1_pd(alpha);
-__m256d four_avx = _mm256_set1_pd(4);
-__m256d one_avx = _mm256_set1_pd(1);
-__m256d minus_avx = _mm256_set1_pd(-1);
-__m256d M1_avx = _mm256_set1_pd(M1);
-__m256d M2_avx = _mm256_set1_pd(M2);
-__m256d a_avx = _mm256_set1_pd(a);
-__m256d b_avx = _mm256_set1_pd(b);
-__m256d dt_avx = _mm256_set1_pd(dt);
-__m256d kk_avx = _mm256_set1_pd(kk);
-__m256d epsilon_avx = _mm256_set1_pd(epsilon);
-#endif
+    #ifdef SSE_VEC
+    __m128d alpha_avx = _mm_set1_pd(alpha);
+    __m128d four_avx = _mm_set1_pd(4);
+    __m128d one_avx = _mm_set1_pd(1);
+    __m128d minus_avx = _mm_set1_pd(-1);
+    __m128d M1_avx = _mm_set1_pd(M1);
+    __m128d M2_avx = _mm_set1_pd(M2);
+    __m128d a_avx = _mm_set1_pd(a);
+    __m128d b_avx = _mm_set1_pd(b);
+    __m128d dt_avx = _mm_set1_pd(dt);
+    __m128d kk_avx = _mm_set1_pd(kk);
+    __m128d epsilon_avx = _mm_set1_pd(epsilon);
+    #endif
 
  // We continue to sweep over the mesh until the simulation has reached
  // the desired number of iterations
@@ -141,21 +209,21 @@ __m256d epsilon_avx = _mm256_set1_pd(epsilon);
 	    for(i = 0; i < n - n%STEP; i+=STEP) 
         {
             #ifdef SSE_VEC
-                __m256d EC_avx = _mm256_loadu_pd(&E_prev_tmp[i]); //current
-                __m256d ET_avx = _mm256_loadu_pd(&E_prev_tmp[i - (n+2)]); //top
-                __m256d EB_avx = _mm256_loadu_pd(&E_prev_tmp[i + (n+2)]); //bottom
-                __m256d EL_avx = _mm256_loadu_pd(&E_prev_tmp[i - 1]); //left
-                __m256d ER_avx = _mm256_loadu_pd(&E_prev_tmp[i + 1]); //right
-                __m256d E_avx = _mm256_add_pd(EC_avx, _mm256_mul_pd(alpha_avx,
-                            _mm256_sub_pd(_mm256_add_pd(_mm256_add_pd(ET_avx, EB_avx), _mm256_add_pd(EL_avx, ER_avx)), _mm256_mul_pd(four_avx, EC_avx))));
-                __m256d R_avx = _mm256_loadu_pd(&R_tmp[i]);
-                E_avx = _mm256_sub_pd(E_avx, _mm256_mul_pd(dt_avx,_mm256_add_pd(_mm256_mul_pd(EC_avx, R_avx),
-                        _mm256_mul_pd(_mm256_mul_pd(_mm256_sub_pd(EC_avx, a_avx),_mm256_sub_pd(EC_avx, one_avx)),_mm256_mul_pd(kk_avx, EC_avx)))));
-                R_avx = _mm256_add_pd(R_avx,_mm256_mul_pd(dt_avx,_mm256_mul_pd(_mm256_add_pd(epsilon_avx,
-                        _mm256_div_pd(_mm256_mul_pd(M1_avx, R_avx), _mm256_add_pd(EC_avx, M2_avx))), _mm256_sub_pd(_mm256_mul_pd(minus_avx, R_avx),
-                        _mm256_mul_pd(kk_avx, _mm256_mul_pd(EC_avx, _mm256_sub_pd(EC_avx, _mm256_add_pd(b_avx, one_avx))))))));
-                _mm256_storeu_pd(&E_tmp[i], E_avx);
-                _mm256_storeu_pd(&R_tmp[i], R_avx);
+                __m128d EC_avx = _mm_loadu_pd(&E_prev_tmp[i]); //current
+                __m128d ET_avx = _mm_loadu_pd(&E_prev_tmp[i - (n+2)]); //top
+                __m128d EB_avx = _mm_loadu_pd(&E_prev_tmp[i + (n+2)]); //bottom
+                __m128d EL_avx = _mm_loadu_pd(&E_prev_tmp[i - 1]); //left
+                __m128d ER_avx = _mm_loadu_pd(&E_prev_tmp[i + 1]); //right
+                __m128d E_avx = _mm_add_pd(EC_avx, _mm_mul_pd(alpha_avx,
+                            _mm_sub_pd(_mm_add_pd(_mm_add_pd(ET_avx, EB_avx), _mm_add_pd(EL_avx, ER_avx)), _mm_mul_pd(four_avx, EC_avx))));
+                __m128d R_avx = _mm_loadu_pd(&R_tmp[i]);
+                E_avx = _mm_sub_pd(E_avx, _mm_mul_pd(dt_avx,_mm_add_pd(_mm_mul_pd(EC_avx, R_avx),
+                        _mm_mul_pd(_mm_mul_pd(_mm_sub_pd(EC_avx, a_avx),_mm_sub_pd(EC_avx, one_avx)),_mm_mul_pd(kk_avx, EC_avx)))));
+                R_avx = _mm_add_pd(R_avx,_mm_mul_pd(dt_avx,_mm_mul_pd(_mm_add_pd(epsilon_avx,
+                        _mm_div_pd(_mm_mul_pd(M1_avx, R_avx), _mm_add_pd(EC_avx, M2_avx))), _mm_sub_pd(_mm_mul_pd(minus_avx, R_avx),
+                        _mm_mul_pd(kk_avx, _mm_mul_pd(EC_avx, _mm_sub_pd(EC_avx, _mm_add_pd(b_avx, one_avx))))))));
+                _mm_storeu_pd(&E_tmp[i], E_avx);
+                _mm_storeu_pd(&R_tmp[i], R_avx);
             #else
 	        E_tmp[i] = E_prev_tmp[i]+alpha*(E_prev_tmp[i+1]+E_prev_tmp[i-1]-4*E_prev_tmp[i]+E_prev_tmp[i+(n+2)]+E_prev_tmp[i-(n+2)]);
             E_tmp[i] += -dt*(kk*E_prev_tmp[i]*(E_prev_tmp[i]-a)*(E_prev_tmp[i]-1)+E_prev_tmp[i]*R_tmp[i]);
@@ -178,14 +246,14 @@ __m256d epsilon_avx = _mm256_set1_pd(epsilon);
         for(i = 0; i < n-n%STEP; i+=STEP) 
         {
             #ifdef SSE_VEC
-                __m256d EC_avx = _mm256_loadu_pd(&E_prev_tmp[i]);
-                __m256d ET_avx = _mm256_loadu_pd(&E_prev_tmp[i - (n+2)]);
-                __m256d EB_avx = _mm256_loadu_pd(&E_prev_tmp[i + (n+2)]);
-                __m256d EL_avx = _mm256_loadu_pd(&E_prev_tmp[i - 1]);
-                __m256d ER_avx = _mm256_loadu_pd(&E_prev_tmp[i + 1]);
-                __m256d E_avx = _mm256_add_pd(EC_avx, _mm256_mul_pd(alpha_avx, _mm256_sub_pd(_mm256_add_pd(_mm256_add_pd(ET_avx, EB_avx),
-                                        _mm256_add_pd(EL_avx, ER_avx)), _mm256_mul_pd(four_avx, EC_avx))));
-            _mm256_storeu_pd(&E_tmp[i], E_avx);
+                __m128d EC_avx = _mm_loadu_pd(&E_prev_tmp[i]);
+                __m128d ET_avx = _mm_loadu_pd(&E_prev_tmp[i - (n+2)]);
+                __m128d EB_avx = _mm_loadu_pd(&E_prev_tmp[i + (n+2)]);
+                __m128d EL_avx = _mm_loadu_pd(&E_prev_tmp[i - 1]);
+                __m128d ER_avx = _mm_loadu_pd(&E_prev_tmp[i + 1]);
+                __m128d E_avx = _mm_add_pd(EC_avx, _mm_mul_pd(alpha_avx, _mm_sub_pd(_mm_add_pd(_mm_add_pd(ET_avx, EB_avx),
+                                        _mm_add_pd(EL_avx, ER_avx)), _mm_mul_pd(four_avx, EC_avx))));
+            _mm_storeu_pd(&E_tmp[i], E_avx);
             #else
                 E_tmp[i] = E_prev_tmp[i]+alpha*(E_prev_tmp[i+1]+E_prev_tmp[i-1]-4*E_prev_tmp[i]+E_prev_tmp[i+(n+2)]+E_prev_tmp[i-(n+2)]);
             #endif
@@ -200,7 +268,7 @@ __m256d epsilon_avx = _mm256_set1_pd(epsilon);
      * Solve the ODE, advancing excitation and recovery variables
      *     to the next timtestep
      */
-
+    //solve_ode(innerBlockRowStartIndex+1, innerBlockRowEndIndex-1, cols, *E_tmp, *R_tmp, *E_prev_tmp, *E ,*R, *E_prev)
     for(j = innerBlockRowStartIndex; j <= innerBlockRowEndIndex; j+=(n+2)) 
     {
         E_tmp = E + j;
@@ -209,16 +277,16 @@ __m256d epsilon_avx = _mm256_set1_pd(epsilon);
         for(i = 0; i < n-n%STEP; i+=STEP) 
         {
             #ifdef SSE_VEC
-                __m256d E_avx = _mm256_loadu_pd(&E_tmp[i]);
-                __m256d EC_avx = _mm256_loadu_pd(&E_prev_tmp[i]);
-                __m256d R_avx = _mm256_loadu_pd(&R_tmp[i]);
-                E_avx = _mm256_sub_pd(E_avx,_mm256_mul_pd(dt_avx,_mm256_add_pd(_mm256_mul_pd(EC_avx, R_avx),
-                _mm256_mul_pd(_mm256_mul_pd(_mm256_sub_pd(EC_avx, a_avx),_mm256_sub_pd(EC_avx, one_avx)),_mm256_mul_pd(kk_avx, EC_avx)))));
-                R_avx = _mm256_add_pd(R_avx,_mm256_mul_pd(dt_avx,_mm256_mul_pd(_mm256_add_pd(epsilon_avx,_mm256_div_pd(_mm256_mul_pd(M1_avx, R_avx),
-                                    _mm256_add_pd(EC_avx, M2_avx))),_mm256_sub_pd(_mm256_mul_pd(minus_avx, R_avx),
-                                    _mm256_mul_pd(kk_avx,_mm256_mul_pd(EC_avx,_mm256_sub_pd(EC_avx, _mm256_add_pd(b_avx, one_avx))))))));
-                _mm256_storeu_pd(&E_tmp[i], E_avx);
-                _mm256_storeu_pd(&R_tmp[i], R_avx);
+                __m128d E_avx = _mm_loadu_pd(&E_tmp[i]);
+                __m128d EC_avx = _mm_loadu_pd(&E_prev_tmp[i]);
+                __m128d R_avx = _mm_loadu_pd(&R_tmp[i]);
+                E_avx = _mm_sub_pd(E_avx,_mm_mul_pd(dt_avx,_mm_add_pd(_mm_mul_pd(EC_avx, R_avx),
+                _mm_mul_pd(_mm_mul_pd(_mm_sub_pd(EC_avx, a_avx),_mm_sub_pd(EC_avx, one_avx)),_mm_mul_pd(kk_avx, EC_avx)))));
+                R_avx = _mm_add_pd(R_avx,_mm_mul_pd(dt_avx,_mm_mul_pd(_mm_add_pd(epsilon_avx,_mm_div_pd(_mm_mul_pd(M1_avx, R_avx),
+                                    _mm_add_pd(EC_avx, M2_avx))),_mm_sub_pd(_mm_mul_pd(minus_avx, R_avx),
+                                    _mm_mul_pd(kk_avx,_mm_mul_pd(EC_avx,_mm_sub_pd(EC_avx, _mm_add_pd(b_avx, one_avx))))))));
+                _mm_storeu_pd(&E_tmp[i], E_avx);
+                _mm_storeu_pd(&R_tmp[i], R_avx);
             #else
                 E_tmp[i] += -dt*(kk*E_prev_tmp[i]*(E_prev_tmp[i]-a)*(E_prev_tmp[i]-1)+E_prev_tmp[i]*R_tmp[i]);
                 R_tmp[i] += dt*(epsilon+M1* R_tmp[i]/( E_prev_tmp[i]+M2))*(-R_tmp[i]-kk*E_prev_tmp[i]*(E_prev_tmp[i]-b-1));
@@ -289,22 +357,27 @@ void solve_MPI(double **_E, double **_E_prev, double *R, double alpha, double dt
     cols = COLUMN(ry, py, n)+2; // 2 side ghost
 
     int innerBlockRowStartIndex = cols+1;
-    int innerBlockRowEndIndex = (rows*cols - 1)- (cols-2) -(cols);
+    int innerBlockRowEndIndex = rows*cols -2*cols+1;
 
     #ifdef SSE_VEC
-    __m256d alpha_avx = _mm256_set1_pd(alpha);
-    __m256d four_avx = _mm256_set1_pd(4);
-    __m256d one_avx = _mm256_set1_pd(1);
-    __m256d minus_avx = _mm256_set1_pd(-1);
-    __m256d M1_avx = _mm256_set1_pd(M1);
-    __m256d M2_avx = _mm256_set1_pd(M2);
-    __m256d a_avx = _mm256_set1_pd(a);
-    __m256d b_avx = _mm256_set1_pd(b);
-    __m256d dt_avx = _mm256_set1_pd(dt);
-    __m256d kk_avx = _mm256_set1_pd(kk);
-    __m256d epsilon_avx = _mm256_set1_pd(epsilon);
-#endif
+    __m128d alpha_avx = _mm_set1_pd(alpha);
+    __m128d four_avx = _mm_set1_pd(4);
+    __m128d one_avx = _mm_set1_pd(1);
+    __m128d minus_avx = _mm_set1_pd(-1);
+    __m128d M1_avx = _mm_set1_pd(M1);
+    __m128d M2_avx = _mm_set1_pd(M2);
+    __m128d a_avx = _mm_set1_pd(a);
+    __m128d b_avx = _mm_set1_pd(b);
+    __m128d dt_avx = _mm_set1_pd(dt);
+    __m128d kk_avx = _mm_set1_pd(kk);
+    __m128d epsilon_avx = _mm_set1_pd(epsilon);
+    #endif
 
+    double *E_plot = NULL;
+    if (cb.plot_freq && (myrank==0))
+    {
+        E_plot = alloc1D(cb.m + 2, cb.n + 2);
+    }
 
     double *send_west_ghost = alloc1D(rows, 1); 
     double *recv_west_ghost = alloc1D(rows, 1); 
@@ -327,7 +400,9 @@ void solve_MPI(double **_E, double **_E_prev, double *R, double alpha, double dt
             //do nothing
         }
         else
-        {
+        {   
+            
+            
             MPI_Request recv_request[4];
             MPI_Request send_request[4];
             MPI_Status send_status[4];
@@ -349,9 +424,9 @@ void solve_MPI(double **_E, double **_E_prev, double *R, double alpha, double dt
             if (ry<py-1)
             {
                 int dest = myrank+1;
-                for (index = cols; index < cols * rows; index += cols) 
+                for (index = cols-2; index < cols * rows; index += cols) 
                 {
-                    send_east_ghost[(index-cols)/cols] = E_prev[index];
+                    send_east_ghost[(index-cols+2)/cols] = E_prev[index];
                 }
                 MPI_Isend(send_east_ghost, rows, MPI_DOUBLE, dest, 0, MPI_COMM_WORLD, &send_request[1]);
 
@@ -362,7 +437,7 @@ void solve_MPI(double **_E, double **_E_prev, double *R, double alpha, double dt
             if (rx > 0) 
             {
                 int dest =  myrank - py;
-                MPI_Isend(E_prev + innerBlockRowStartIndex - 1, cols, MPI_DOUBLE, dest, 0, MPI_COMM_WORLD, &send_request[2]);
+                MPI_Isend(E_prev + cols, cols, MPI_DOUBLE, dest, 0, MPI_COMM_WORLD, &send_request[2]);
 
                 int src = myrank - py;
                 MPI_Irecv(E_prev, cols, MPI_DOUBLE, src, 0, MPI_COMM_WORLD, &recv_request[2]);
@@ -373,94 +448,55 @@ void solve_MPI(double **_E, double **_E_prev, double *R, double alpha, double dt
             if (rx < px-1) 
             {
                 int src = myrank + py;
-                MPI_Irecv(E_prev + (innerBlockRowEndIndex-1) + cols, cols, MPI_DOUBLE, src, 0, MPI_COMM_WORLD, &recv_request[3]);
+                MPI_Irecv(E_prev + rows * cols -cols, cols, MPI_DOUBLE, src, 0, MPI_COMM_WORLD, &recv_request[3]);
                 
 
                 int dest = myrank + py;
-                MPI_Isend(E_prev + innerBlockRowEndIndex - 1, cols, MPI_DOUBLE, dest, 0, MPI_COMM_WORLD, &send_request[3]);
+                MPI_Isend(E_prev + rows * cols - 2*cols, cols, MPI_DOUBLE, dest, 0, MPI_COMM_WORLD, &send_request[3]);
             }
 
-            // west wait
-            if (ry > 0) 
+    if (ry == 0 )
+    {
+        for (index = 0; index < rows * cols; index+=cols) 
+        {
+            E_prev[index] = E_prev[index+2];
+        }
+    }
+    if (ry==py-1)
+        {
+            for (index = cols-1; index < rows * cols; index+= cols) 
             {
-                MPI_Wait(&recv_request[0], &recv_status[0]);
-                MPI_Wait(&send_request[0], &send_status[0]);
+                E_prev[index] = E_prev[index-2];
             }
-            // east wait
-            if (ry < py-1) 
+        }
+    // north fill
+    if (rx == 0)
+        {
+            for (index = 0; index < cols; index++) 
             {
-                MPI_Wait(&recv_request[1], &recv_status[1]);
-                MPI_Wait(&send_request[1], &send_status[1]);
+                E_prev[index] = E_prev[index + 2*cols];
             }
-
-            // north wait
-            if (rx >0) 
-            {
-                MPI_Wait(&send_request[2], &send_status[2]);
-                MPI_Wait(&recv_request[2], &recv_status[2]);
-            }
-
-            // south wait
-            if (rx < px-1) 
-            {
-                MPI_Wait(&send_request[3], &send_status[3]);
-                MPI_Wait(&recv_request[3], &recv_status[3]);
-            }
-
-            // west fill
-            if (ry == 0 )
-            {
-                for (index = 0; index < rows * cols; index+=cols) 
-                {
-                    E_prev[index] = E_prev[index+2];
-                }
-            }
-            else
-            {
-                for (index = 0; index < rows * cols; index+=cols) 
-                {
-                    E_prev[index] = recv_west_ghost[index/cols];
-                }
-
-            }
-
-            // east fill
-            if (ry==py-1)
-            {
-                for (index = cols-1; index < rows * cols; index+= cols) 
-                {
-                    E_prev[index] = E_prev[index-2];
-                }
-            }
-            else
-            {
-                for (index = cols-1; index < rows * cols; index+=cols) 
-                {
-                    E_prev[index] = recv_east_ghost[(index -cols +1)/cols];
-                }
-            }
-
-            // north fill
-            if (rx == 0)
-            {
-                for (index = 0; index < cols; index++) 
-                {
-                    E_prev[index] = E_prev[index + 2*cols];
-                }
-            }// else received 
+        }// else received 
 
             // south fill
-            if (rx == px-1)
+    if (rx == px-1)
+        {
+            for (index = rows * cols - cols; index < rows * cols; index++) 
             {
-                for (index = rows * cols - cols; index < rows * cols; index++) 
-                {
-                    E_prev[index] = E_prev[index - cols*2];
-                }
-            }//else received
-      }
+                E_prev[index] = E_prev[index - cols*2];
+            }
+        }//else received
+
+    if(myrank == 0){
+                printf("E_prev from rank %d\n",myrank);
+                printMat2("E_prev before ghost computation", E_prev, rows, cols);
+                printf("---------------------------------------------------------");
+
+            }
+//do computation while sending and receiving            
 #ifdef FUSED
     // Solve for the excitation, a PDE
-    for(j = innerBlockRowStartIndex; j <= innerBlockRowEndIndex; j+=cols)
+    for(j = innerBlockRowStartIndex+1; j <= innerBlockRowEndIndex-1; j+=cols)
     {
         E_tmp = E + j;
 	    E_prev_tmp = E_prev + j;
@@ -468,21 +504,21 @@ void solve_MPI(double **_E, double **_E_prev, double *R, double alpha, double dt
 	    for(i = 0; i < (cols-2)-(cols-2)%STEP; i+=STEP) 
         {
             #ifdef SSE_VEC
-                __m256d EC_avx = _mm256_loadu_pd(&E_prev_tmp[i]); //current
-                __m256d ET_avx = _mm256_loadu_pd(&E_prev_tmp[i - cols]); //top
-                __m256d EB_avx = _mm256_loadu_pd(&E_prev_tmp[i + cols]); //bottom
-                __m256d EL_avx = _mm256_loadu_pd(&E_prev_tmp[i - 1]); //left
-                __m256d ER_avx = _mm256_loadu_pd(&E_prev_tmp[i + 1]); //right
-                __m256d E_avx = _mm256_add_pd(EC_avx, _mm256_mul_pd(alpha_avx,
-                            _mm256_sub_pd(_mm256_add_pd(_mm256_add_pd(ET_avx, EB_avx), _mm256_add_pd(EL_avx, ER_avx)), _mm256_mul_pd(four_avx, EC_avx))));
-                __m256d R_avx = _mm256_loadu_pd(&R_tmp[i]);
-                E_avx = _mm256_sub_pd(E_avx, _mm256_mul_pd(dt_avx,_mm256_add_pd(_mm256_mul_pd(EC_avx, R_avx),
-                        _mm256_mul_pd(_mm256_mul_pd(_mm256_sub_pd(EC_avx, a_avx),_mm256_sub_pd(EC_avx, one_avx)),_mm256_mul_pd(kk_avx, EC_avx)))));
-                R_avx = _mm256_add_pd(R_avx,_mm256_mul_pd(dt_avx,_mm256_mul_pd(_mm256_add_pd(epsilon_avx,
-                        _mm256_div_pd(_mm256_mul_pd(M1_avx, R_avx), _mm256_add_pd(EC_avx, M2_avx))), _mm256_sub_pd(_mm256_mul_pd(minus_avx, R_avx),
-                        _mm256_mul_pd(kk_avx, _mm256_mul_pd(EC_avx, _mm256_sub_pd(EC_avx, _mm256_add_pd(b_avx, one_avx))))))));
-                _mm256_storeu_pd(&E_tmp[i], E_avx);
-                _mm256_storeu_pd(&R_tmp[i], R_avx);
+                __m128d EC_avx = _mm_loadu_pd(&E_prev_tmp[i]); //current
+                __m128d ET_avx = _mm_loadu_pd(&E_prev_tmp[i - cols]); //top
+                __m128d EB_avx = _mm_loadu_pd(&E_prev_tmp[i + cols]); //bottom
+                __m128d EL_avx = _mm_loadu_pd(&E_prev_tmp[i - 1]); //left
+                __m128d ER_avx = _mm_loadu_pd(&E_prev_tmp[i + 1]); //right
+                __m128d E_avx = _mm_add_pd(EC_avx, _mm_mul_pd(alpha_avx,
+                            _mm_sub_pd(_mm_add_pd(_mm_add_pd(ET_avx, EB_avx), _mm_add_pd(EL_avx, ER_avx)), _mm_mul_pd(four_avx, EC_avx))));
+                __m128d R_avx = _mm_loadu_pd(&R_tmp[i]);
+                E_avx = _mm_sub_pd(E_avx, _mm_mul_pd(dt_avx,_mm_add_pd(_mm_mul_pd(EC_avx, R_avx),
+                        _mm_mul_pd(_mm_mul_pd(_mm_sub_pd(EC_avx, a_avx),_mm_sub_pd(EC_avx, one_avx)),_mm_mul_pd(kk_avx, EC_avx)))));
+                R_avx = _mm_add_pd(R_avx,_mm_mul_pd(dt_avx,_mm_mul_pd(_mm_add_pd(epsilon_avx,
+                        _mm_div_pd(_mm_mul_pd(M1_avx, R_avx), _mm_add_pd(EC_avx, M2_avx))), _mm_sub_pd(_mm_mul_pd(minus_avx, R_avx),
+                        _mm_mul_pd(kk_avx, _mm_mul_pd(EC_avx, _mm_sub_pd(EC_avx, _mm_add_pd(b_avx, one_avx))))))));
+                _mm_storeu_pd(&E_tmp[i], E_avx);
+                _mm_storeu_pd(&R_tmp[i], R_avx);
             #else
                 E_tmp[i] = E_prev_tmp[i]+alpha*(E_prev_tmp[i+1]+E_prev_tmp[i-1]-4*E_prev_tmp[i]+E_prev_tmp[i+cols]+E_prev_tmp[i-cols]);
                 E_tmp[i] += -dt*(kk*E_prev_tmp[i]*(E_prev_tmp[i]-a)*(E_prev_tmp[i]-1)+E_prev_tmp[i]*R_tmp[i]);
@@ -498,21 +534,21 @@ void solve_MPI(double **_E, double **_E_prev, double *R, double alpha, double dt
     }
 #else
     // Solve for the excitation, a PDE
-    for(j = innerBlockRowStartIndex; j <= innerBlockRowEndIndex; j+=cols) 
+    for(j = innerBlockRowStartIndex+1; j <= innerBlockRowEndIndex-1; j+=cols) 
     {
         E_tmp = E + j;
         E_prev_tmp = E_prev + j;
         for(i = 0; i < (cols-2)-(cols-2)%STEP; i+=STEP) 
         {
             #ifdef SSE_VEC
-                __m256d EC_avx = _mm256_loadu_pd(&E_prev_tmp[i]);
-                __m256d ET_avx = _mm256_loadu_pd(&E_prev_tmp[i - cols]);
-                __m256d EB_avx = _mm256_loadu_pd(&E_prev_tmp[i + cols]);
-                __m256d EL_avx = _mm256_loadu_pd(&E_prev_tmp[i - 1]);
-                __m256d ER_avx = _mm256_loadu_pd(&E_prev_tmp[i + 1]);
-                __m256d E_avx = _mm256_add_pd(EC_avx, _mm256_mul_pd(alpha_avx, _mm256_sub_pd(_mm256_add_pd(_mm256_add_pd(ET_avx, EB_avx),
-                                        _mm256_add_pd(EL_avx, ER_avx)), _mm256_mul_pd(four_avx, EC_avx))));
-            _mm256_storeu_pd(&E_tmp[i], E_avx);
+                __m128d EC_avx = _mm_loadu_pd(&E_prev_tmp[i]);
+                __m128d ET_avx = _mm_loadu_pd(&E_prev_tmp[i - cols]);
+                __m128d EB_avx = _mm_loadu_pd(&E_prev_tmp[i + cols]);
+                __m128d EL_avx = _mm_loadu_pd(&E_prev_tmp[i - 1]);
+                __m128d ER_avx = _mm_loadu_pd(&E_prev_tmp[i + 1]);
+                __m128d E_avx = _mm_add_pd(EC_avx, _mm_mul_pd(alpha_avx, _mm_sub_pd(_mm_add_pd(_mm_add_pd(ET_avx, EB_avx),
+                                        _mm_add_pd(EL_avx, ER_avx)), _mm_mul_pd(four_avx, EC_avx))));
+            _mm_storeu_pd(&E_tmp[i], E_avx);
             #else
                 E_tmp[i] = E_prev_tmp[i]+alpha*(E_prev_tmp[i+1]+E_prev_tmp[i-1]-4*E_prev_tmp[i]+E_prev_tmp[i+cols]+E_prev_tmp[i-cols]);
             #endif
@@ -527,36 +563,76 @@ void solve_MPI(double **_E, double **_E_prev, double *R, double alpha, double dt
      *     to the next timtestep
      */
 
-    for(j = innerBlockRowStartIndex; j <= innerBlockRowEndIndex; j+=cols) 
-    {
-        E_tmp = E + j;
-        R_tmp = R + j;
-	    E_prev_tmp = E_prev + j;
-        for(i = 0; i < (cols-2)-(cols-2)%STEP; i+=STEP) 
-        {
-            #ifdef SSE_VEC
-                __m256d E_avx = _mm256_loadu_pd(&E_tmp[i]);
-                __m256d EC_avx = _mm256_loadu_pd(&E_prev_tmp[i]);
-                __m256d R_avx = _mm256_loadu_pd(&R_tmp[i]);
-                E_avx = _mm256_sub_pd(E_avx,_mm256_mul_pd(dt_avx,_mm256_add_pd(_mm256_mul_pd(EC_avx, R_avx),
-                _mm256_mul_pd(_mm256_mul_pd(_mm256_sub_pd(EC_avx, a_avx),_mm256_sub_pd(EC_avx, one_avx)),_mm256_mul_pd(kk_avx, EC_avx)))));
-                R_avx = _mm256_add_pd(R_avx,_mm256_mul_pd(dt_avx,_mm256_mul_pd(_mm256_add_pd(epsilon_avx,_mm256_div_pd(_mm256_mul_pd(M1_avx, R_avx),
-                                    _mm256_add_pd(EC_avx, M2_avx))),_mm256_sub_pd(_mm256_mul_pd(minus_avx, R_avx),
-                                    _mm256_mul_pd(kk_avx,_mm256_mul_pd(EC_avx,_mm256_sub_pd(EC_avx, _mm256_add_pd(b_avx, one_avx))))))));
-                _mm256_storeu_pd(&E_tmp[i], E_avx);
-                _mm256_storeu_pd(&R_tmp[i], R_avx);
-            #else
-                E_tmp[i] += -dt*(kk*E_prev_tmp[i]*(E_prev_tmp[i]-a)*(E_prev_tmp[i]-1)+E_prev_tmp[i]*R_tmp[i]);
-                R_tmp[i] += dt*(epsilon+M1* R_tmp[i]/( E_prev_tmp[i]+M2))*(-R_tmp[i]-kk*E_prev_tmp[i]*(E_prev_tmp[i]-b-1));
-            #endif
-        }
-        for (i= (cols-2)-(cols-2)%STEP; i<cols-2; i++)
-        {
-            E_tmp[i] += -dt*(kk*E_prev_tmp[i]*(E_prev_tmp[i]-a)*(E_prev_tmp[i]-1)+E_prev_tmp[i]*R_tmp[i]);
-            R_tmp[i] += dt*(epsilon+M1* R_tmp[i]/( E_prev_tmp[i]+M2))*(-R_tmp[i]-kk*E_prev_tmp[i]*(E_prev_tmp[i]-b-1));
-        }
-    }
+    
 #endif       
+
+            //wait must be in order as above
+            
+            
+            // north wait
+            if (rx >0) 
+            {
+                MPI_Wait(&send_request[2], &send_status[2]);
+                MPI_Wait(&recv_request[2], &recv_status[2]);
+                // printf("rank %d receive north ghost \n",myrank);
+               
+                
+            }
+            solve_north_south(innerBlockRowStartIndex, 2*cols-1,cols, E_tmp,R_tmp, E_prev_tmp, E ,R,  E_prev,dt);
+             if(myrank == 0){
+          printMat2("E_prev before south ghost computation", E_prev, rows, cols);
+            }
+            // south wait
+            if (rx < px-1) 
+            {
+                MPI_Wait(&recv_request[3], &recv_status[3]);
+                MPI_Wait(&send_request[3], &send_status[3]);
+                
+            }
+            solve_north_south(innerBlockRowEndIndex, rows*cols-cols-1 ,cols, E_tmp,R_tmp, E_prev_tmp, E ,R,  E_prev,dt);
+
+                        
+            // west wait
+            if (ry > 0) 
+            {
+                MPI_Wait(&recv_request[0], &recv_status[0]);
+                MPI_Wait(&send_request[0], &send_status[0]);
+            }
+            // east wait
+            if (ry < py-1) 
+            {
+                MPI_Wait(&send_request[1], &send_status[1]);
+                MPI_Wait(&recv_request[1], &recv_status[1]);
+            }
+
+            // west fill
+            if (ry != 0 )
+            {
+                for (index = 0; index < rows * cols; index+=cols) 
+                {
+                    E_prev[index] = recv_west_ghost[index/cols];
+                }
+
+            }
+            solve_east_west(innerBlockRowStartIndex, innerBlockRowEndIndex+1,cols,E_tmp, R_tmp, E_prev_tmp,E ,R, E_prev, dt,alpha);
+
+            // east fill
+            if (ry!=py-1)
+            {
+                for (index = cols-1; index < rows * cols; index+=cols) 
+                {
+                    E_prev[index] = recv_east_ghost[(index -cols +1)/cols];
+                }
+                
+            }
+            solve_east_west(2*cols-2, rows*cols-cols,cols,E_tmp, R_tmp, E_prev_tmp,E ,R, E_prev,dt,alpha);
+
+            
+      }
+      if(myrank == 0){
+          printMat2("E_prev after ghost computation", E_prev, rows, cols);
+      }
+       
 /////////////////////////////////////////////////////////////////////////////////
 
         if (cb.stats_freq)
@@ -573,7 +649,54 @@ void solve_MPI(double **_E, double **_E_prev, double *R, double alpha, double dt
         {
                 if (!(niter % cb.plot_freq))
                 {
-                    plotter->updatePlot(E,  niter, m, n);
+                    if (myrank)
+                    {
+                        MPI_Request send_request[1];
+                        MPI_Status send_status[1];
+                        int dest = 0;
+                        MPI_Isend(E, rows * cols, MPI_DOUBLE, dest, 0, MPI_COMM_WORLD, &send_request[0]);
+                        MPI_Wait(&send_request[0], &send_status[0]);
+                    }
+                    else
+                    {
+                        for (int tmp_rank = nprocs-1; tmp_rank >=0 ; tmp_rank--)
+                        {
+                            if (tmp_rank)
+                            {
+                                int tmp_rx = tmp_rank / py;
+                                int tmp_ry = tmp_rank % py;
+                                int tmp_rows = ROW(tmp_rx, px, m)+2; // 2 side ghost
+                                int tmp_cols = COLUMN(tmp_ry, py, n)+2; // 2 side ghost
+                                double *subE_plot = alloc1D(tmp_rows, tmp_cols);
+                                MPI_Request recv_request[1];
+                                MPI_Status recv_status[1];
+                                int src = tmp_rank;
+                                MPI_Irecv(subE_plot, tmp_rows * tmp_cols, MPI_DOUBLE, src, 0, MPI_COMM_WORLD, &recv_request[0]);
+                                MPI_Wait(&recv_request[0], &recv_status[0]);
+                                int start_row = ROW_INDEX(tmp_rx, px, m); 
+                                int start_col = COLUMN_INDEX(tmp_ry, py, n);
+                                int i_start = (tmp_rx==0) ? 0 : 1;
+                                int j_start = (tmp_ry==0) ? 0 : 1;
+                                int i_stop = (tmp_rx==px-1) ? tmp_rows : tmp_rows-1;
+                                int j_stop = (tmp_ry==py-1) ? tmp_cols : tmp_cols-1;
+                                for (int i=i_start; i<i_stop; i++)
+                                    for (int j=j_start; j<j_stop; j++)
+                                    {
+                                        int index = (start_row+i)*(n+2)+(start_col+j); // cancel side effect 
+                                        E_plot[index] = subE_plot[i*tmp_cols+j];
+                                    }
+                            }
+                            else
+                            {
+                                for (int i = 0; i <rows-1; i++) 
+                                    for (int j = 0; j < cols-1; j++) 
+                                    {
+                                        E_plot[i*(n+2)+j] = E[i*cols+j];
+                                    }
+                            }  
+                        }
+                        plotter->updatePlot(E_plot,  niter, m, n);
+                    }
                 }
             }
 
@@ -582,13 +705,13 @@ void solve_MPI(double **_E, double **_E_prev, double *R, double alpha, double dt
     } //end of 'niter' loop at the beginning
 
   //  printMat2("Rank 0 Matrix E_prev", E_prev, m,n);  // return the L2 and infinity norms via in-out parameters
-
-    stats(E_prev,m,n,&Linf,&sumSq);
+    stats(E_prev,rows-2,cols-2,&Linf,&sumSq);
     if (noComm)
     {
         //do nothing
     }
     else{
+            MPI_Barrier(MPI_COMM_WORLD);
             double _Linf, _sumSq;
             MPI_Reduce(&Linf, &_Linf, 1, MPI_DOUBLE, MPI_MAX, root, MPI_COMM_WORLD);
             MPI_Reduce(&sumSq, &_sumSq, 1, MPI_DOUBLE, MPI_SUM, root, MPI_COMM_WORLD);
@@ -621,13 +744,15 @@ void printMat2(const char mesg[], double *E, int m, int n){
       return;
 #endif
     printf("%s\n",mesg);
-    for (i=0; i < (m+2)*(n+2); i++){
-       int rowIndex = i / (n+2);
-       int colIndex = i % (n+2);
-       if ((colIndex>0) && (colIndex<n+1))
-          if ((rowIndex > 0) && (rowIndex < m+1))
-            printf("%6.3f ", E[i]);
-       if (colIndex == n+1)
-	    printf("\n");
+    for (i=0; i < (m)*(n); i++){
+       int rowIndex = i / (n);
+       int colIndex = i % (n);
+    //    if ((colIndex>0) && (colIndex<n+1))
+    //       if ((rowIndex > 0) && (rowIndex < m+1))
+        printf("%6.3f ", E[i]);
+        if (colIndex == n-1){
+           printf("\n");
+        }
+	    
     }
 }
