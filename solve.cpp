@@ -48,9 +48,9 @@ double L2Norm(double sumSq){
     return l2norm;
 }
 
-void solve_north_south(int start_idx, int end_idx, int cols, double *E_tmp, double *R_tmp, double *E_prev_tmp, double *E ,double *R, double *E_prev, double dt, double alpha){
+void solve_ghost(int start_idx, int end_idx, int cols, int step,double *E_tmp, double *R_tmp, double *E_prev_tmp, double *E ,double *R, double *E_prev, double dt, double alpha){
     int i,j;
-    printf("solve noth south from %d to %d\n",start_idx,end_idx);
+    //printf("solve noth south from %d to %d\n",start_idx,end_idx);
     for(j = start_idx; j <= end_idx; j+=cols) 
     {
         
@@ -59,35 +59,17 @@ void solve_north_south(int start_idx, int end_idx, int cols, double *E_tmp, doub
 	    E_prev_tmp = E_prev + j;
        
             
-            for(i = 0; i < cols; i++) {
+            for(i = 0; i < step; i++) {
 	        E_tmp[i] = E_prev_tmp[i]+alpha*(E_prev_tmp[i+1]+E_prev_tmp[i-1]-4*E_prev_tmp[i]+E_prev_tmp[i+cols]+E_prev_tmp[i-cols]);
             E_tmp[i] += -dt*(kk*E_prev_tmp[i]*(E_prev_tmp[i]-a)*(E_prev_tmp[i]-1)+E_prev_tmp[i]*R_tmp[i]);
             R_tmp[i] += dt*(epsilon+M1* R_tmp[i]/( E_prev_tmp[i]+M2))*(-R_tmp[i]-kk*E_prev_tmp[i]*(E_prev_tmp[i]-b-1));
             }
         
-        printf("\n");
+        //printf("\n");
     }
 }
 
-void solve_east_west(int start_idx, int end_idx, int cols, double *E_tmp, double *R_tmp, double *E_prev_tmp, double *E ,double *R, double *E_prev,int dt, int alpha){
-    int i,j;
-    printf("solve east west from %d to %d\n",start_idx,end_idx);
-    for(j = start_idx; j <= end_idx; j+=cols) 
-    {
-        
-        E_tmp = E + j;
-        R_tmp = R + j;
-	    E_prev_tmp = E_prev + j;
-       
-            
-            for(i = 0; i < 1; i++) {
-	        E_tmp[i] = E_prev_tmp[i]+alpha*(E_prev_tmp[i+1]+E_prev_tmp[i-1]-4*E_prev_tmp[i]+E_prev_tmp[i+cols]+E_prev_tmp[i-cols]);
-            E_tmp[i] += -dt*(kk*E_prev_tmp[i]*(E_prev_tmp[i]-a)*(E_prev_tmp[i]-1)+E_prev_tmp[i]*R_tmp[i]);
-            R_tmp[i] += dt*(epsilon+M1* R_tmp[i]/( E_prev_tmp[i]+M2))*(-R_tmp[i]-kk*E_prev_tmp[i]*(E_prev_tmp[i]-b-1));
-        }
-                
-    }
-}
+
 void solve_single(double **_E, double **_E_prev, double *R, double alpha, double dt, Plotter *plotter, double &L2, double &Linf){
 
  // Simulated time is different from the integer timestep number
@@ -462,7 +444,7 @@ void solve_MPI(double **_E, double **_E_prev, double *R, double alpha, double dt
 	    E_prev_tmp = E_prev + j;
         R_tmp = R + j;
 	    for(i = 0; i < cols-4; i++) {
-	        E_tmp[i] = E_prev_tmp[i]+alpha*(E_prev_tmp[i+1]+E_prev_tmp[i-1]-4*E_prev_tmp[i]+E_prev_tmp[i+(n+2)]+E_prev_tmp[i-(n+2)]);
+	        E_tmp[i] = E_prev_tmp[i]+alpha*(E_prev_tmp[i+1]+E_prev_tmp[i-1]-4*E_prev_tmp[i]+E_prev_tmp[i+cols]+E_prev_tmp[i-cols]);
             E_tmp[i] += -dt*(kk*E_prev_tmp[i]*(E_prev_tmp[i]-a)*(E_prev_tmp[i]-1)+E_prev_tmp[i]*R_tmp[i]);
             R_tmp[i] += dt*(epsilon+M1* R_tmp[i]/( E_prev_tmp[i]+M2))*(-R_tmp[i]-kk*E_prev_tmp[i]*(E_prev_tmp[i]-b-1));
             
@@ -563,17 +545,24 @@ void solve_MPI(double **_E, double **_E_prev, double *R, double alpha, double dt
                 }
                 
             }
-            solve_north_south(innerBlockRowStartIndex, 2*cols-2,cols, E_tmp,R_tmp, E_prev_tmp, E ,R,  E_prev,dt,alpha);
-            solve_north_south(innerBlockRowEndIndex, rows*cols-cols-2 ,cols, E_tmp,R_tmp, E_prev_tmp, E ,R,  E_prev,dt,alpha);
-            solve_east_west(innerBlockRowStartIndex, innerBlockRowEndIndex,cols,E_tmp, R_tmp, E_prev_tmp,E ,R, E_prev, dt,alpha);
-            solve_east_west(2*cols-2, rows*cols-cols-2,cols,E_tmp, R_tmp, E_prev_tmp,E ,R, E_prev,dt,alpha);
+    
+         
+            solve_ghost(innerBlockRowStartIndex, 2*cols-2,cols,cols-2, E_tmp,R_tmp, E_prev_tmp, E ,R,  E_prev,dt,alpha);
+      
+            solve_ghost(innerBlockRowEndIndex, rows*cols-cols-2 ,cols, cols-2,E_tmp,R_tmp, E_prev_tmp, E ,R,  E_prev,dt,alpha);
+    //         if(myrank == 0){
+    //        printMat2("E_prev before ghost computation", E, rows, cols);
+    //   }       
+            solve_ghost(innerBlockRowStartIndex+cols, innerBlockRowEndIndex-cols,cols,1,E_tmp, R_tmp, E_prev_tmp,E ,R, E_prev, dt,alpha);
+                  
+            solve_ghost(3*cols-2, rows*cols-2*cols-2,cols,1,E_tmp, R_tmp, E_prev_tmp,E ,R, E_prev,dt,alpha);
+    //      if(myrank == 0){
+    //       printMat2("E after ghost computation", E, rows, cols);
+    //   }       
 
             
       }
-      if(myrank == 0){
-          printMat2("E_prev after ghost computation", E_prev, rows, cols);
-      }
-       
+      
 /////////////////////////////////////////////////////////////////////////////////
 
         if (cb.stats_freq)
