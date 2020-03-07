@@ -16,7 +16,7 @@
 
 using namespace std;
 
-#define FUSED 1
+#define FUSED 0
 #define ROW(rx, px, m) (rx < (px -(m%px)) ? m/px : m/px + 1) //get number of rows in the block
 #define COLUMN(ry, py, n) (ry < (py - (m%py)) ? m/py : m/py + 1) // get number of columns in the block
 
@@ -463,11 +463,11 @@ void solve_MPI(double **_E, double **_E_prev, double *R, double alpha, double dt
     }
 #else
     // Solve for the excitation, a PDE
-    for(j = innerBlockRowStartIndex+1; j <= innerBlockRowEndIndex-1; j+=cols) 
+    for(j = innerBlockRowStartIndex+1+cols; j <= innerBlockRowEndIndex+1-cols; j+=cols) 
     {
         E_tmp = E + j;
         E_prev_tmp = E_prev + j;
-        for(i = 0; i < (cols-2)-(cols-2)%STEP; i+=STEP) 
+        for(i = 0; i < (cols-4)-(cols-4)%STEP; i+=STEP) 
         {
             #ifdef SSE_VEC
                 __m128d EC_avx = _mm_loadu_pd(&E_prev_tmp[i]);
@@ -482,7 +482,7 @@ void solve_MPI(double **_E, double **_E_prev, double *R, double alpha, double dt
                 E_tmp[i] = E_prev_tmp[i]+alpha*(E_prev_tmp[i+1]+E_prev_tmp[i-1]-4*E_prev_tmp[i]+E_prev_tmp[i+cols]+E_prev_tmp[i-cols]);
             #endif
         }
-        for (i= (cols-2)-(cols-2)%STEP; i<cols-2; i++)
+        for (i= (cols-4)-(cols-4)%STEP; i<cols-4; i++)
         {
             E_tmp[i] = E_prev_tmp[i]+alpha*(E_prev_tmp[i+1]+E_prev_tmp[i-1]-4*E_prev_tmp[i]+E_prev_tmp[i+cols]+E_prev_tmp[i-cols]);
         }
@@ -499,39 +499,7 @@ void solve_MPI(double **_E, double **_E_prev, double *R, double alpha, double dt
             
             MPI_Waitall(count+1,recv_request,recv_status);
             MPI_Waitall(count+1,send_request,send_status);
-            // north wait
-            // if (rx >0) 
-            // {
-            //     MPI_Wait(&send_request[2], &send_status[2]);
-            //     MPI_Wait(&recv_request[2], &recv_status[2]);
-            //     // printf("rank %d receive north ghost \n",myrank);
-               
-                
-            // }
             
-            // // south wait
-            // if (rx < px-1) 
-            // {
-            //     MPI_Wait(&recv_request[3], &recv_status[3]);
-            //     MPI_Wait(&send_request[3], &send_status[3]);
-                
-            // }
-            
-                        
-            // // west wait
-            // if (ry > 0) 
-            // {
-            //     MPI_Wait(&recv_request[0], &recv_status[0]);
-            //     MPI_Wait(&send_request[0], &send_status[0]);
-            // }
-            // // east wait
-            // if (ry < py-1) 
-            // {
-            //     MPI_Wait(&send_request[1], &send_status[1]);
-            //     MPI_Wait(&recv_request[1], &recv_status[1]);
-            // }
-
-            // west fill
             if (ry != 0 )
             {
                 for (index = 0; index < rows * cols; index+=cols) 
