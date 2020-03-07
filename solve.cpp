@@ -355,52 +355,57 @@ void solve_MPI(double **_E, double **_E_prev, double *R, double alpha, double dt
             MPI_Request send_request[4];
             MPI_Status send_status[4];
             MPI_Status recv_status[4];
+            int count = -1;
             //west ghost
             if (ry>0) 
             {
+                count ++;
                 int src = myrank-1;
-                MPI_Irecv(recv_west_ghost, rows, MPI_DOUBLE, src, 0, MPI_COMM_WORLD, &recv_request[0]);
+                MPI_Irecv(recv_west_ghost, rows, MPI_DOUBLE, src, 0, MPI_COMM_WORLD, &recv_request[count]);
 
                 for (index=1; index<rows*cols; index+=cols)
                 {
                     send_west_ghost[(index-1)/cols]= E_prev[index];
                 }
                 int dest = myrank -1;
-                MPI_Isend(send_west_ghost, rows, MPI_DOUBLE, dest, 0, MPI_COMM_WORLD, &send_request[0]);
+                MPI_Isend(send_west_ghost, rows, MPI_DOUBLE, dest, 0, MPI_COMM_WORLD, &send_request[count]);
             }
             // east ghost 
             if (ry<py-1)
             {
+                count ++;
                 int dest = myrank+1;
                 for (index = cols-2; index < cols * rows; index += cols) 
                 {
                     send_east_ghost[(index-cols+2)/cols] = E_prev[index];
                 }
-                MPI_Isend(send_east_ghost, rows, MPI_DOUBLE, dest, 0, MPI_COMM_WORLD, &send_request[1]);
+                MPI_Isend(send_east_ghost, rows, MPI_DOUBLE, dest, 0, MPI_COMM_WORLD, &send_request[count]);
 
                 int src = myrank+1;
-                MPI_Irecv(recv_east_ghost, rows, MPI_DOUBLE, src, 0, MPI_COMM_WORLD, &recv_request[1]);
+                MPI_Irecv(recv_east_ghost, rows, MPI_DOUBLE, src, 0, MPI_COMM_WORLD, &recv_request[count]);
             }
             // north ghost
             if (rx > 0) 
             {
+                count ++;
                 int dest =  myrank - py;
-                MPI_Isend(E_prev + cols, cols, MPI_DOUBLE, dest, 0, MPI_COMM_WORLD, &send_request[2]);
+                MPI_Isend(E_prev + cols, cols, MPI_DOUBLE, dest, 0, MPI_COMM_WORLD, &send_request[count]);
 
                 int src = myrank - py;
-                MPI_Irecv(E_prev, cols, MPI_DOUBLE, src, 0, MPI_COMM_WORLD, &recv_request[2]);
+                MPI_Irecv(E_prev, cols, MPI_DOUBLE, src, 0, MPI_COMM_WORLD, &recv_request[count]);
             
             }
             // south ghost
             /*BOTTOM: send/rcv*/
             if (rx < px-1) 
             {
+                count ++;
                 int src = myrank + py;
-                MPI_Irecv(E_prev + rows * cols -cols, cols, MPI_DOUBLE, src, 0, MPI_COMM_WORLD, &recv_request[3]);
+                MPI_Irecv(E_prev + rows * cols -cols, cols, MPI_DOUBLE, src, 0, MPI_COMM_WORLD, &recv_request[count]);
                 
 
                 int dest = myrank + py;
-                MPI_Isend(E_prev + rows * cols - 2*cols, cols, MPI_DOUBLE, dest, 0, MPI_COMM_WORLD, &send_request[3]);
+                MPI_Isend(E_prev + rows * cols - 2*cols, cols, MPI_DOUBLE, dest, 0, MPI_COMM_WORLD, &send_request[count]);
             }
 
     if (ry == 0 )
@@ -492,38 +497,39 @@ void solve_MPI(double **_E, double **_E_prev, double *R, double alpha, double dt
 
             //wait must be in order as above
             
-            
+            MPI_Waitall(count+1,recv_request,recv_status);
+            MPI_Waitall(count+1,send_request,send_status);
             // north wait
-            if (rx >0) 
-            {
-                MPI_Wait(&send_request[2], &send_status[2]);
-                MPI_Wait(&recv_request[2], &recv_status[2]);
-                // printf("rank %d receive north ghost \n",myrank);
+            // if (rx >0) 
+            // {
+            //     MPI_Wait(&send_request[2], &send_status[2]);
+            //     MPI_Wait(&recv_request[2], &recv_status[2]);
+            //     // printf("rank %d receive north ghost \n",myrank);
                
                 
-            }
+            // }
             
-            // south wait
-            if (rx < px-1) 
-            {
-                MPI_Wait(&recv_request[3], &recv_status[3]);
-                MPI_Wait(&send_request[3], &send_status[3]);
+            // // south wait
+            // if (rx < px-1) 
+            // {
+            //     MPI_Wait(&recv_request[3], &recv_status[3]);
+            //     MPI_Wait(&send_request[3], &send_status[3]);
                 
-            }
+            // }
             
                         
-            // west wait
-            if (ry > 0) 
-            {
-                MPI_Wait(&recv_request[0], &recv_status[0]);
-                MPI_Wait(&send_request[0], &send_status[0]);
-            }
-            // east wait
-            if (ry < py-1) 
-            {
-                MPI_Wait(&send_request[1], &send_status[1]);
-                MPI_Wait(&recv_request[1], &recv_status[1]);
-            }
+            // // west wait
+            // if (ry > 0) 
+            // {
+            //     MPI_Wait(&recv_request[0], &recv_status[0]);
+            //     MPI_Wait(&send_request[0], &send_status[0]);
+            // }
+            // // east wait
+            // if (ry < py-1) 
+            // {
+            //     MPI_Wait(&send_request[1], &send_status[1]);
+            //     MPI_Wait(&recv_request[1], &recv_status[1]);
+            // }
 
             // west fill
             if (ry != 0 )
