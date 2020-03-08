@@ -290,7 +290,7 @@ void solve_MPI(double **_E, double **_E_prev, double *R, double alpha, double dt
     double *E_prev_tmp = *_E_prev;
     double mx, sumSq;
     int niter;
-    int m = cb.m, n=cb.n, px=cb.px, py=cb.py;
+    int m = cb.m, n=cb.n, py=cb.px, px=cb.py;
     int rx, ry, rows, cols, index, i, j;
     bool noComm=cb.noComm;
     

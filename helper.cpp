@@ -67,7 +67,7 @@ void init (double *E,double *E_prev,double *R,int m,int n){
     #endif
 
 #ifdef _MPI_
-    int px=cb.px, py=cb.py; //
+    int py=cb.px, px=cb.py; //
     int nprocs, myrank, rx, ry, rows, cols;
     MPI_Comm_size(MPI_COMM_WORLD,&nprocs);
     MPI_Comm_rank(MPI_COMM_WORLD,&myrank);
