@@ -50,7 +50,7 @@ double L2Norm(double sumSq){
 
 void solve_ghost(int start_idx, int end_idx, int cols, int step,double *E_tmp, double *R_tmp, double *E_prev_tmp, double *E ,double *R, double *E_prev, double dt, double alpha){
     int i,j;
-    //printf("solve noth south from %d to %d\n",start_idx,end_idx);
+    #pragma unroll
     for(j = start_idx; j <= end_idx; j+=cols) 
     {
         
@@ -58,14 +58,12 @@ void solve_ghost(int start_idx, int end_idx, int cols, int step,double *E_tmp, d
         R_tmp = R + j;
 	    E_prev_tmp = E_prev + j;
        
-            
+            #pragma unroll
             for(i = 0; i < step; i++) {
 	        E_tmp[i] = E_prev_tmp[i]+alpha*(E_prev_tmp[i+1]+E_prev_tmp[i-1]-4*E_prev_tmp[i]+E_prev_tmp[i+cols]+E_prev_tmp[i-cols]);
             E_tmp[i] += -dt*(kk*E_prev_tmp[i]*(E_prev_tmp[i]-a)*(E_prev_tmp[i]-1)+E_prev_tmp[i]*R_tmp[i]);
             R_tmp[i] += dt*(epsilon+M1* R_tmp[i]/( E_prev_tmp[i]+M2))*(-R_tmp[i]-kk*E_prev_tmp[i]*(E_prev_tmp[i]-b-1));
             }
-        
-        //printf("\n");
     }
 }
 
@@ -462,10 +460,12 @@ void solve_MPI(double **_E, double **_E_prev, double *R, double alpha, double dt
         // }
     }
 #else
+    #pragma unroll
     for(j = innerBlockRowStartIndex+1+cols; j <= innerBlockRowEndIndex+1-cols; j+=cols) 
     {
         E_tmp = E + j;
         E_prev_tmp = E_prev + j;
+        #pragma unroll
         for(i = 0; i < (cols-4)-(cols-4)%STEP; i+=STEP) 
         {
             #ifdef SSE_VEC
@@ -481,6 +481,7 @@ void solve_MPI(double **_E, double **_E_prev, double *R, double alpha, double dt
                 E_tmp[i] = E_prev_tmp[i]+alpha*(E_prev_tmp[i+1]+E_prev_tmp[i-1]-4*E_prev_tmp[i]+E_prev_tmp[i+cols]+E_prev_tmp[i-cols]);
             #endif
         }
+        #pragma unroll
         for (i= (cols-4)-(cols-4)%STEP; i<cols-4; i++)
         {
             E_tmp[i] = E_prev_tmp[i]+alpha*(E_prev_tmp[i+1]+E_prev_tmp[i-1]-4*E_prev_tmp[i]+E_prev_tmp[i+cols]+E_prev_tmp[i-cols]);
@@ -490,12 +491,13 @@ void solve_MPI(double **_E, double **_E_prev, double *R, double alpha, double dt
      * Solve the ODE, advancing excitation and recovery variables
      *     to the next timtestep
      */
-
+    #pragma unroll
     for(j = innerBlockRowStartIndex+1+cols; j <= innerBlockRowEndIndex+1-cols; j+=cols) 
     {
         E_tmp = E + j;
         R_tmp = R + j;
 	    E_prev_tmp = E_prev + j;
+        #pragma unroll
         for(i = 0; i < (cols-4)-(cols-4)%STEP; i+=STEP) 
         {
             #ifdef SSE_VEC
@@ -514,6 +516,7 @@ void solve_MPI(double **_E, double **_E_prev, double *R, double alpha, double dt
                 R_tmp[i] += dt*(epsilon+M1* R_tmp[i]/( E_prev_tmp[i]+M2))*(-R_tmp[i]-kk*E_prev_tmp[i]*(E_prev_tmp[i]-b-1));
             #endif
         }
+        #pragma unroll
         for (i= (cols-4)-(cols-4)%STEP; i<cols-4; i++)
         {
             E_tmp[i] += -dt*(kk*E_prev_tmp[i]*(E_prev_tmp[i]-a)*(E_prev_tmp[i]-1)+E_prev_tmp[i]*R_tmp[i]);
@@ -553,16 +556,11 @@ void solve_MPI(double **_E, double **_E_prev, double *R, double alpha, double dt
             solve_ghost(innerBlockRowStartIndex, 2*cols-2,cols,cols-2, E_tmp,R_tmp, E_prev_tmp, E ,R,  E_prev,dt,alpha);
       
             solve_ghost(innerBlockRowEndIndex, rows*cols-cols-2 ,cols, cols-2,E_tmp,R_tmp, E_prev_tmp, E ,R,  E_prev,dt,alpha);
-    //         if(myrank == 0){
-    //        printMat2("E_prev before ghost computation", E, rows, cols);
-    //   }       
+        
             solve_ghost(innerBlockRowStartIndex+cols, innerBlockRowEndIndex-cols,cols,1,E_tmp, R_tmp, E_prev_tmp,E ,R, E_prev, dt,alpha);
                   
             solve_ghost(3*cols-2, rows*cols-2*cols-2,cols,1,E_tmp, R_tmp, E_prev_tmp,E ,R, E_prev,dt,alpha);
-    //      if(myrank == 0){
-    //       printMat2("E after ghost computation", E, rows, cols);
-    //   }       
-
+   
             
       }
       
