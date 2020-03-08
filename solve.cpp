@@ -462,7 +462,6 @@ void solve_MPI(double **_E, double **_E_prev, double *R, double alpha, double dt
         // }
     }
 #else
-    // Solve for the excitation, a PDE
     for(j = innerBlockRowStartIndex+1+cols; j <= innerBlockRowEndIndex+1-cols; j+=cols) 
     {
         E_tmp = E + j;
@@ -492,13 +491,43 @@ void solve_MPI(double **_E, double **_E_prev, double *R, double alpha, double dt
      *     to the next timtestep
      */
 
+    for(j = innerBlockRowStartIndex+1+cols; j <= innerBlockRowEndIndex+1-cols; j+=cols) 
+    {
+        E_tmp = E + j;
+        R_tmp = R + j;
+	    E_prev_tmp = E_prev + j;
+        for(i = 0; i < (cols-4)-(cols-4)%STEP; i+=STEP) 
+        {
+            #ifdef SSE_VEC
+                __m128d E_avx = _mm_loadu_pd(&E_tmp[i]);
+                __m128d EC_avx = _mm_loadu_pd(&E_prev_tmp[i]);
+                __m128d R_avx = _mm_loadu_pd(&R_tmp[i]);
+                E_avx = _mm_sub_pd(E_avx,_mm_mul_pd(dt_avx,_mm_add_pd(_mm_mul_pd(EC_avx, R_avx),
+                _mm_mul_pd(_mm_mul_pd(_mm_sub_pd(EC_avx, a_avx),_mm_sub_pd(EC_avx, one_avx)),_mm_mul_pd(kk_avx, EC_avx)))));
+                R_avx = _mm_add_pd(R_avx,_mm_mul_pd(dt_avx,_mm_mul_pd(_mm_add_pd(epsilon_avx,_mm_div_pd(_mm_mul_pd(M1_avx, R_avx),
+                                    _mm_add_pd(EC_avx, M2_avx))),_mm_sub_pd(_mm_mul_pd(minus_avx, R_avx),
+                                    _mm_mul_pd(kk_avx,_mm_mul_pd(EC_avx,_mm_sub_pd(EC_avx, _mm_add_pd(b_avx, one_avx))))))));
+                _mm_storeu_pd(&E_tmp[i], E_avx);
+                _mm_storeu_pd(&R_tmp[i], R_avx);
+            #else
+                E_tmp[i] += -dt*(kk*E_prev_tmp[i]*(E_prev_tmp[i]-a)*(E_prev_tmp[i]-1)+E_prev_tmp[i]*R_tmp[i]);
+                R_tmp[i] += dt*(epsilon+M1* R_tmp[i]/( E_prev_tmp[i]+M2))*(-R_tmp[i]-kk*E_prev_tmp[i]*(E_prev_tmp[i]-b-1));
+            #endif
+        }
+        for (i= (cols-4)-(cols-4)%STEP; i<cols-4; i++)
+        {
+            E_tmp[i] += -dt*(kk*E_prev_tmp[i]*(E_prev_tmp[i]-a)*(E_prev_tmp[i]-1)+E_prev_tmp[i]*R_tmp[i]);
+            R_tmp[i] += dt*(epsilon+M1* R_tmp[i]/( E_prev_tmp[i]+M2))*(-R_tmp[i]-kk*E_prev_tmp[i]*(E_prev_tmp[i]-b-1));
+        }
+    }
+
     
 #endif       
 
             //wait must be in order as above
             
             MPI_Waitall(count+1,recv_request,recv_status);
-            MPI_Waitall(count+1,send_request,send_status);
+           // MPI_Waitall(count+1,send_request,send_status);
             
             if (ry != 0 )
             {
