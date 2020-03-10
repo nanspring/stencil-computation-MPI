@@ -229,6 +229,7 @@ void solve_MPI(double **_E, double **_E_prev, double *R, double alpha, double dt
 
     MPI_Datatype vec_t;
     MPI_Type_vector(rows, 1, cols, MPI_DOUBLE, &vec_t);
+    MPI_Type_commit(&vec_t);
 
     double *E_plot = NULL;
     if (cb.plot_freq && (myrank==0))
@@ -263,20 +264,20 @@ void solve_MPI(double **_E, double **_E_prev, double *R, double alpha, double dt
             {
                 count ++;
                 int src = myrank-1;
-                MPI_Irecv(&E_prev[0], 1, vec_t, src, 0, MPI_COMM_WORLD, &recv_request[count]);
+                MPI_Irecv(E_prev, 1, vec_t, src, 0, MPI_COMM_WORLD, &recv_request[count]);
 
                 int dest = myrank -1;
-                MPI_Isend(&E_prev[1], 1, vec_t, dest, 0, MPI_COMM_WORLD, &send_request[count]);
+                MPI_Isend(E_prev+1, 1, vec_t, dest, 0, MPI_COMM_WORLD, &send_request[count]);
             }
             // east ghost 
             if (ry<py-1)
             {
                 count ++;
                 int dest = myrank+1;
-                MPI_Isend(&E_prev[cols-2], 1, vec_t, dest, 0, MPI_COMM_WORLD, &send_request[count]);
+                MPI_Isend(E_prev+cols-2, 1, vec_t, dest, 0, MPI_COMM_WORLD, &send_request[count]);
 
                 int src = myrank+1;
-                MPI_Irecv(&E_prev[cols-1], 1, vec_t, src, 0, MPI_COMM_WORLD, &recv_request[count]);
+                MPI_Irecv(E_prev+cols-1, 1, vec_t, src, 0, MPI_COMM_WORLD, &recv_request[count]);
             }
 
             // north ghost
