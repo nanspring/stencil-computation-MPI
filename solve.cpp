@@ -50,6 +50,9 @@ double L2Norm(double sumSq){
 
 void solve_ghost(int start_idx, int end_idx, int cols, int step,double *E_tmp, double *R_tmp, double *E_prev_tmp, double *E ,double *R, double *E_prev, double dt, double alpha){
     int i,j;
+    #ifdef AVX_VEC
+    #pragma ivdep
+    #endif
     #pragma prefetch
     for(j = start_idx; j <= end_idx; j+=cols) 
     {
@@ -59,6 +62,9 @@ void solve_ghost(int start_idx, int end_idx, int cols, int step,double *E_tmp, d
 	    E_prev_tmp = E_prev + j;
        
             #pragma prefetch
+            #ifdef AVX_VEC
+            #pragma ivdep
+            #endif
             for(i = 0; i < step; i++) {
 	        E_tmp[i] = E_prev_tmp[i]+alpha*(E_prev_tmp[i+1]+E_prev_tmp[i-1]-4*E_prev_tmp[i]+E_prev_tmp[i+cols]+E_prev_tmp[i-cols]);
             E_tmp[i] += -dt*(kk*E_prev_tmp[i]*(E_prev_tmp[i]-a)*(E_prev_tmp[i]-1)+E_prev_tmp[i]*R_tmp[i]);
@@ -348,6 +354,10 @@ void solve_MPI(double **_E, double **_E_prev, double *R, double alpha, double dt
                 int src = myrank-1;
                 MPI_Irecv(recv_west_ghost, rows, MPI_DOUBLE, src, 0, MPI_COMM_WORLD, &recv_request[count]);
 
+                #ifdef AVX_VEC
+                #pragma ivdep
+                #endif
+                #pragma prefetch
                 for (index=1; index<rows*cols; index+=cols)
                 {
                     send_west_ghost[(index-1)/cols]= E_prev[index];
@@ -360,6 +370,11 @@ void solve_MPI(double **_E, double **_E_prev, double *R, double alpha, double dt
             {
                 count ++;
                 int dest = myrank+1;
+
+                #ifdef AVX_VEC
+                #pragma ivdep
+                #endif
+                #pragma prefetch
                 for (index = cols-2; index < cols * rows; index += cols) 
                 {
                     send_east_ghost[(index-cols+2)/cols] = E_prev[index];
@@ -394,7 +409,8 @@ void solve_MPI(double **_E, double **_E_prev, double *R, double alpha, double dt
             }
 
     if (ry == 0 )
-    {
+    {   
+        #pragma prefetch
         for (index = 0; index < rows * cols; index+=cols) 
         {
             E_prev[index] = E_prev[index+2];
@@ -402,6 +418,7 @@ void solve_MPI(double **_E, double **_E_prev, double *R, double alpha, double dt
     }
     if (ry==py-1)
         {
+            #pragma prefetch
             for (index = cols-1; index < rows * cols; index+= cols) 
             {
                 E_prev[index] = E_prev[index-2];
@@ -410,6 +427,7 @@ void solve_MPI(double **_E, double **_E_prev, double *R, double alpha, double dt
     // north fill
     if (rx == 0)
         {
+            #pragma prefetch
             for (index = 0; index < cols; index++) 
             {
                 E_prev[index] = E_prev[index + 2*cols];
@@ -419,6 +437,7 @@ void solve_MPI(double **_E, double **_E_prev, double *R, double alpha, double dt
             // south fill
     if (rx == px-1)
         {
+            #pragma prefetch
             for (index = rows * cols - cols; index < rows * cols; index++) 
             {
                 E_prev[index] = E_prev[index - cols*2];
@@ -428,11 +447,17 @@ void solve_MPI(double **_E, double **_E_prev, double *R, double alpha, double dt
 //do computation while sending and receiving            
 
     #pragma prefetch
+    #ifdef AVX_VEC
+    #pragma ivdep
+    #endif
     for(j = innerBlockRowStartIndex+1+cols; j <= innerBlockRowEndIndex+1-cols; j+=cols) 
     {
         E_tmp = E + j;
         E_prev_tmp = E_prev + j;
         #pragma prefetch
+        #ifdef AVX_VEC
+        #pragma ivdep
+        #endif
         for(i = 0; i < (cols-4); i++) 
         {          
                 E_tmp[i] = E_prev_tmp[i]+alpha*(E_prev_tmp[i+1]+E_prev_tmp[i-1]-4*E_prev_tmp[i]+E_prev_tmp[i+cols]+E_prev_tmp[i-cols]);
@@ -444,12 +469,18 @@ void solve_MPI(double **_E, double **_E_prev, double *R, double alpha, double dt
      *     to the next timtestep
      */
     #pragma prefetch
+    #ifdef AVX_VEC
+    #pragma ivdep
+    #endif
     for(j = innerBlockRowStartIndex+1+cols; j <= innerBlockRowEndIndex+1-cols; j+=cols) 
     {
         E_tmp = E + j;
         R_tmp = R + j;
 	    E_prev_tmp = E_prev + j;
         #pragma prefetch
+        #ifdef AVX_VEC
+        #pragma ivdep
+        #endif
         for(i = 0; i < (cols-4); i++) 
         {
                 E_tmp[i] += -dt*(kk*E_prev_tmp[i]*(E_prev_tmp[i]-a)*(E_prev_tmp[i]-1)+E_prev_tmp[i]*R_tmp[i]);
@@ -464,7 +495,11 @@ void solve_MPI(double **_E, double **_E_prev, double *R, double alpha, double dt
            // MPI_Waitall(count+1,send_request,send_status);
             
             if (ry != 0 )
-            {
+            {   
+                #ifdef AVX_VEC
+                #pragma ivdep
+                #endif
+                #pragma prefetch
                 for (index = 0; index < rows * cols; index+=cols) 
                 {
                     E_prev[index] = recv_west_ghost[index/cols];
@@ -476,6 +511,10 @@ void solve_MPI(double **_E, double **_E_prev, double *R, double alpha, double dt
             // east fill
             if (ry!=py-1)
             {
+                #ifdef AVX_VEC
+                #pragma ivdep
+                #endif
+                #pragma prefetch
                 for (index = cols-1; index < rows * cols; index+=cols) 
                 {
                     E_prev[index] = recv_east_ghost[(index -cols +1)/cols];
@@ -595,4 +634,3 @@ void solve(double **_E, double **_E_prev, double *R, double alpha, double dt, Pl
   solve_single(_E ,_E_prev, R, alpha, dt, plotter, L2, Linf);
 #endif
 }
-
