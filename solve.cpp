@@ -1,11 +1,3 @@
-/* 
- * Solves the Aliev-Panfilov model  using an explicit numerical scheme.
- * Based on code orginally provided by Xing Cai, Simula Research Laboratory
- * 
- * Modified and  restructured by Scott B. Baden, UCSD
- * 
- */
-
 #include <assert.h>
 #include <stdlib.h>
 #include <iostream>
@@ -24,7 +16,7 @@
 
 using namespace std;
 
-#define FUSED 1
+#define FUSED 0
 #define ROW(rx, px, m) (rx < (px -(m%px)) ? m/px : m/px + 1) //get number of rows in the block
 #define COLUMN(ry, py, n) (ry < (py - (m%py)) ? m/py : m/py + 1) // get number of columns in the block
 
@@ -38,15 +30,7 @@ void printMat2(const char mesg[], double *E, int m, int n);
 
 extern control_block cb;
 
-#ifdef SSE_VEC
-#define STEP 2
-/*If you intend to vectorize using SSE instructions, you must disable the compiler's auto-vectorizer*/
-__attribute__((optimize("no-tree-vectorize")))
-#else 
-#define STEP 1
-#endif 
-
-// The L2 norm of an array is computed by taking sum of the squares
+ // The L2 norm of an array is computed by taking sum of the squares
 // of each element, normalizing by dividing by the number of points
 // and then taking the sequare root of the result
 //
@@ -55,6 +39,26 @@ double L2Norm(double sumSq){
     l2norm = sqrt(l2norm);
     return l2norm;
 }
+
+void solve_ghost(int start_idx, int end_idx, int cols, int step,double *E_tmp, double *R_tmp, double *E_prev_tmp, double *E ,double *R, double *E_prev, double dt, double alpha){
+    int i,j;
+    #pragma prefetch
+    for(j = start_idx; j <= end_idx; j+=cols) 
+    {
+        
+        E_tmp = E + j;
+        R_tmp = R + j;
+	    E_prev_tmp = E_prev + j;
+       
+            #pragma prefetch
+            for(i = 0; i < step; i++) {
+	        E_tmp[i] = E_prev_tmp[i]+alpha*(E_prev_tmp[i+1]+E_prev_tmp[i-1]-4*E_prev_tmp[i]+E_prev_tmp[i+cols]+E_prev_tmp[i-cols]);
+            E_tmp[i] += -dt*(kk*E_prev_tmp[i]*(E_prev_tmp[i]-a)*(E_prev_tmp[i]-1)+E_prev_tmp[i]*R_tmp[i]);
+            R_tmp[i] += dt*(epsilon+M1* R_tmp[i]/( E_prev_tmp[i]+M2))*(-R_tmp[i]-kk*E_prev_tmp[i]*(E_prev_tmp[i]-b-1));
+            }
+    }
+}
+
 
 void solve_single(double **_E, double **_E_prev, double *R, double alpha, double dt, Plotter *plotter, double &L2, double &Linf){
 
@@ -70,19 +74,6 @@ void solve_single(double **_E, double **_E_prev, double *R, double alpha, double
  int innerBlockRowStartIndex = (n+2)+1;
  int innerBlockRowEndIndex = (((m+2)*(n+2) - 1) - (n)) - (n+2);
 
-#ifdef SSE_VEC
-__m128d alpha_avx = _mm_set1_pd(alpha);
-__m128d four_avx = _mm_set1_pd(4);
-__m128d one_avx = _mm_set1_pd(1);
-__m128d minus_avx = _mm_set1_pd(-1);
-__m128d M1_avx = _mm_set1_pd(M1);
-__m128d M2_avx = _mm_set1_pd(M2);
-__m128d a_avx = _mm_set1_pd(a);
-__m128d b_avx = _mm_set1_pd(b);
-__m128d dt_avx = _mm_set1_pd(dt);
-__m128d kk_avx = _mm_set1_pd(kk);
-__m128d epsilon_avx = _mm_set1_pd(epsilon);
-#endif
 
  // We continue to sweep over the mesh until the simulation has reached
  // the desired number of iterations
@@ -140,33 +131,9 @@ __m128d epsilon_avx = _mm_set1_pd(epsilon);
         E_tmp = E + j;
 	    E_prev_tmp = E_prev + j;
         R_tmp = R + j;
-	    for(i = 0; i < n - n%STEP; i+=STEP) 
+	    for(i = 0; i < n; i++) 
         {
-            #ifdef SSE_VEC
-                __m128d EC_avx = _mm_loadu_pd(&E_prev_tmp[i]); //current
-                __m128d ET_avx = _mm_loadu_pd(&E_prev_tmp[i - (n+2)]); //top
-                __m128d EB_avx = _mm_loadu_pd(&E_prev_tmp[i + (n+2)]); //bottom
-                __m128d EL_avx = _mm_loadu_pd(&E_prev_tmp[i - 1]); //left
-                __m128d ER_avx = _mm_loadu_pd(&E_prev_tmp[i + 1]); //right
-                __m128d E_avx = _mm_add_pd(EC_avx, _mm_mul_pd(alpha_avx,
-                            _mm_sub_pd(_mm_add_pd(_mm_add_pd(ET_avx, EB_avx), _mm_add_pd(EL_avx, ER_avx)), _mm_mul_pd(four_avx, EC_avx))));
-                __m128d R_avx = _mm_loadu_pd(&R_tmp[i]);
-                E_avx = _mm_sub_pd(E_avx, _mm_mul_pd(dt_avx,_mm_add_pd(_mm_mul_pd(EC_avx, R_avx),
-                        _mm_mul_pd(_mm_mul_pd(_mm_sub_pd(EC_avx, a_avx),_mm_sub_pd(EC_avx, one_avx)),_mm_mul_pd(kk_avx, EC_avx)))));
-                R_avx = _mm_add_pd(R_avx,_mm_mul_pd(dt_avx,_mm_mul_pd(_mm_add_pd(epsilon_avx,
-                        _mm_div_pd(_mm_mul_pd(M1_avx, R_avx), _mm_add_pd(EC_avx, M2_avx))), _mm_sub_pd(_mm_mul_pd(minus_avx, R_avx),
-                        _mm_mul_pd(kk_avx, _mm_mul_pd(EC_avx, _mm_sub_pd(EC_avx, _mm_add_pd(b_avx, one_avx))))))));
-                _mm_storeu_pd(&E_tmp[i], E_avx);
-                _mm_storeu_pd(&R_tmp[i], R_avx);
-            #else
 	        E_tmp[i] = E_prev_tmp[i]+alpha*(E_prev_tmp[i+1]+E_prev_tmp[i-1]-4*E_prev_tmp[i]+E_prev_tmp[i+(n+2)]+E_prev_tmp[i-(n+2)]);
-            E_tmp[i] += -dt*(kk*E_prev_tmp[i]*(E_prev_tmp[i]-a)*(E_prev_tmp[i]-1)+E_prev_tmp[i]*R_tmp[i]);
-            R_tmp[i] += dt*(epsilon+M1* R_tmp[i]/( E_prev_tmp[i]+M2))*(-R_tmp[i]-kk*E_prev_tmp[i]*(E_prev_tmp[i]-b-1));
-            #endif
-        }
-        for (i=n-n%STEP; i<n; i++)
-        {
-            E_tmp[i] = E_prev_tmp[i]+alpha*(E_prev_tmp[i+1]+E_prev_tmp[i-1]-4*E_prev_tmp[i]+E_prev_tmp[i+(n+2)]+E_prev_tmp[i-(n+2)]);
             E_tmp[i] += -dt*(kk*E_prev_tmp[i]*(E_prev_tmp[i]-a)*(E_prev_tmp[i]-1)+E_prev_tmp[i]*R_tmp[i]);
             R_tmp[i] += dt*(epsilon+M1* R_tmp[i]/( E_prev_tmp[i]+M2))*(-R_tmp[i]-kk*E_prev_tmp[i]*(E_prev_tmp[i]-b-1));
         }
@@ -177,22 +144,7 @@ __m128d epsilon_avx = _mm_set1_pd(epsilon);
     {
         E_tmp = E + j;
         E_prev_tmp = E_prev + j;
-        for(i = 0; i < n-n%STEP; i+=STEP) 
-        {
-            #ifdef SSE_VEC
-                __m128d EC_avx = _mm_loadu_pd(&E_prev_tmp[i]);
-                __m128d ET_avx = _mm_loadu_pd(&E_prev_tmp[i - (n+2)]);
-                __m128d EB_avx = _mm_loadu_pd(&E_prev_tmp[i + (n+2)]);
-                __m128d EL_avx = _mm_loadu_pd(&E_prev_tmp[i - 1]);
-                __m128d ER_avx = _mm_loadu_pd(&E_prev_tmp[i + 1]);
-                __m128d E_avx = _mm_add_pd(EC_avx, _mm_mul_pd(alpha_avx, _mm_sub_pd(_mm_add_pd(_mm_add_pd(ET_avx, EB_avx),
-                                        _mm_add_pd(EL_avx, ER_avx)), _mm_mul_pd(four_avx, EC_avx))));
-            _mm_storeu_pd(&E_tmp[i], E_avx);
-            #else
-                E_tmp[i] = E_prev_tmp[i]+alpha*(E_prev_tmp[i+1]+E_prev_tmp[i-1]-4*E_prev_tmp[i]+E_prev_tmp[i+(n+2)]+E_prev_tmp[i-(n+2)]);
-            #endif
-        }
-        for (i = n-n%STEP; i<n; i++)
+        for(i = 0; i < n; i++) 
         {
             E_tmp[i] = E_prev_tmp[i]+alpha*(E_prev_tmp[i+1]+E_prev_tmp[i-1]-4*E_prev_tmp[i]+E_prev_tmp[i+(n+2)]+E_prev_tmp[i-(n+2)]);
         }
@@ -202,31 +154,13 @@ __m128d epsilon_avx = _mm_set1_pd(epsilon);
      * Solve the ODE, advancing excitation and recovery variables
      *     to the next timtestep
      */
-
+    //solve_ode(innerBlockRowStartIndex+1, innerBlockRowEndIndex-1, cols, *E_tmp, *R_tmp, *E_prev_tmp, *E ,*R, *E_prev)
     for(j = innerBlockRowStartIndex; j <= innerBlockRowEndIndex; j+=(n+2)) 
     {
         E_tmp = E + j;
         R_tmp = R + j;
 	    E_prev_tmp = E_prev + j;
-        for(i = 0; i < n-n%STEP; i+=STEP) 
-        {
-            #ifdef SSE_VEC
-                __m128d E_avx = _mm_loadu_pd(&E_tmp[i]);
-                __m128d EC_avx = _mm_loadu_pd(&E_prev_tmp[i]);
-                __m128d R_avx = _mm_loadu_pd(&R_tmp[i]);
-                E_avx = _mm_sub_pd(E_avx,_mm_mul_pd(dt_avx,_mm_add_pd(_mm_mul_pd(EC_avx, R_avx),
-                _mm_mul_pd(_mm_mul_pd(_mm_sub_pd(EC_avx, a_avx),_mm_sub_pd(EC_avx, one_avx)),_mm_mul_pd(kk_avx, EC_avx)))));
-                R_avx = _mm_add_pd(R_avx,_mm_mul_pd(dt_avx,_mm_mul_pd(_mm_add_pd(epsilon_avx,_mm_div_pd(_mm_mul_pd(M1_avx, R_avx),
-                                    _mm_add_pd(EC_avx, M2_avx))),_mm_sub_pd(_mm_mul_pd(minus_avx, R_avx),
-                                    _mm_mul_pd(kk_avx,_mm_mul_pd(EC_avx,_mm_sub_pd(EC_avx, _mm_add_pd(b_avx, one_avx))))))));
-                _mm_storeu_pd(&E_tmp[i], E_avx);
-                _mm_storeu_pd(&R_tmp[i], R_avx);
-            #else
-                E_tmp[i] += -dt*(kk*E_prev_tmp[i]*(E_prev_tmp[i]-a)*(E_prev_tmp[i]-1)+E_prev_tmp[i]*R_tmp[i]);
-                R_tmp[i] += dt*(epsilon+M1* R_tmp[i]/( E_prev_tmp[i]+M2))*(-R_tmp[i]-kk*E_prev_tmp[i]*(E_prev_tmp[i]-b-1));
-            #endif
-        }
-        for (i=n-n%STEP; i<n; i++)
+        for(i = 0; i < n; i++) 
         {
             E_tmp[i] += -dt*(kk*E_prev_tmp[i]*(E_prev_tmp[i]-a)*(E_prev_tmp[i]-1)+E_prev_tmp[i]*R_tmp[i]);
             R_tmp[i] += dt*(epsilon+M1* R_tmp[i]/( E_prev_tmp[i]+M2))*(-R_tmp[i]-kk*E_prev_tmp[i]*(E_prev_tmp[i]-b-1));
@@ -276,7 +210,7 @@ void solve_MPI(double **_E, double **_E_prev, double *R, double alpha, double dt
     double *E_prev_tmp = *_E_prev;
     double mx, sumSq;
     int niter;
-    int m = cb.m, n=cb.n, px=cb.px, py=cb.py;
+    int m = cb.m, n=cb.n, py=cb.px, px=cb.py;
     int rx, ry, rows, cols, index, i, j;
     bool noComm=cb.noComm;
     
@@ -293,30 +227,14 @@ void solve_MPI(double **_E, double **_E_prev, double *R, double alpha, double dt
     int innerBlockRowStartIndex = cols+1;
     int innerBlockRowEndIndex = rows*cols -2*cols+1;
 
-    #ifdef SSE_VEC
-    __m128d alpha_avx = _mm_set1_pd(alpha);
-    __m128d four_avx = _mm_set1_pd(4);
-    __m128d one_avx = _mm_set1_pd(1);
-    __m128d minus_avx = _mm_set1_pd(-1);
-    __m128d M1_avx = _mm_set1_pd(M1);
-    __m128d M2_avx = _mm_set1_pd(M2);
-    __m128d a_avx = _mm_set1_pd(a);
-    __m128d b_avx = _mm_set1_pd(b);
-    __m128d dt_avx = _mm_set1_pd(dt);
-    __m128d kk_avx = _mm_set1_pd(kk);
-    __m128d epsilon_avx = _mm_set1_pd(epsilon);
-    #endif
+    MPI_Datatype vec_t;
+    MPI_Type_vector(rows, 1, cols, MPI_DOUBLE, &vec_t);
 
     double *E_plot = NULL;
     if (cb.plot_freq && (myrank==0))
     {
         E_plot = alloc1D(cb.m + 2, cb.n + 2);
-    }
-
-    double *send_west_ghost = alloc1D(rows, 1); 
-    double *recv_west_ghost = alloc1D(rows, 1); 
-    double *send_east_ghost = alloc1D(rows, 1); 
-    double *recv_east_ghost = alloc1D(rows, 1);    
+    }    
 
     for (niter = 0; niter < cb.niters; niter++)
     {
@@ -334,88 +252,57 @@ void solve_MPI(double **_E, double **_E_prev, double *R, double alpha, double dt
             //do nothing
         }
         else
-        {
+        {   
             MPI_Request recv_request[4];
             MPI_Request send_request[4];
             MPI_Status send_status[4];
             MPI_Status recv_status[4];
+            int count = -1;
             //west ghost
             if (ry>0) 
             {
+                count ++;
                 int src = myrank-1;
-                MPI_Irecv(recv_west_ghost, rows, MPI_DOUBLE, src, 0, MPI_COMM_WORLD, &recv_request[0]);
+                MPI_Irecv(&E_prev[0], 1, vec_t, src, 0, MPI_COMM_WORLD, &recv_request[count]);
 
-                for (index=1; index<rows*cols; index+=cols)
-                {
-                    send_west_ghost[(index-1)/cols]= E_prev[index];
-                }
                 int dest = myrank -1;
-                MPI_Isend(send_west_ghost, rows, MPI_DOUBLE, dest, 0, MPI_COMM_WORLD, &send_request[0]);
+                MPI_Isend(&E_prev[1], 1, vec_t, dest, 0, MPI_COMM_WORLD, &send_request[count]);
             }
             // east ghost 
             if (ry<py-1)
             {
+                count ++;
                 int dest = myrank+1;
-                for (index = cols-2; index < cols * rows; index += cols) 
-                {
-                    send_east_ghost[(index-cols+2)/cols] = E_prev[index];
-                }
-                MPI_Isend(send_east_ghost, rows, MPI_DOUBLE, dest, 0, MPI_COMM_WORLD, &send_request[1]);
+                MPI_Isend(&E_prev[cols-2], 1, vec_t, dest, 0, MPI_COMM_WORLD, &send_request[count]);
 
                 int src = myrank+1;
-                MPI_Irecv(recv_east_ghost, rows, MPI_DOUBLE, src, 0, MPI_COMM_WORLD, &recv_request[1]);
+                MPI_Irecv(&E_prev[cols-1], 1, vec_t, src, 0, MPI_COMM_WORLD, &recv_request[count]);
             }
+
             // north ghost
             if (rx > 0) 
             {
+                count ++;
                 int dest =  myrank - py;
-                MPI_Isend(E_prev + cols, cols, MPI_DOUBLE, dest, 0, MPI_COMM_WORLD, &send_request[2]);
+                MPI_Isend(E_prev + cols, cols, MPI_DOUBLE, dest, 0, MPI_COMM_WORLD, &send_request[count]);
 
                 int src = myrank - py;
-                MPI_Irecv(E_prev, cols, MPI_DOUBLE, src, 0, MPI_COMM_WORLD, &recv_request[2]);
+                MPI_Irecv(E_prev, cols, MPI_DOUBLE, src, 0, MPI_COMM_WORLD, &recv_request[count]);
             
             }
             // south ghost
             /*BOTTOM: send/rcv*/
             if (rx < px-1) 
             {
+                count ++;
                 int src = myrank + py;
-                MPI_Irecv(E_prev + rows * cols -cols, cols, MPI_DOUBLE, src, 0, MPI_COMM_WORLD, &recv_request[3]);
+                MPI_Irecv(E_prev + rows * cols -cols, cols, MPI_DOUBLE, src, 0, MPI_COMM_WORLD, &recv_request[count]);
                 
 
                 int dest = myrank + py;
-                MPI_Isend(E_prev + rows * cols - 2*cols, cols, MPI_DOUBLE, dest, 0, MPI_COMM_WORLD, &send_request[3]);
+                MPI_Isend(E_prev + rows * cols - 2*cols, cols, MPI_DOUBLE, dest, 0, MPI_COMM_WORLD, &send_request[count]);
             }
 
-            //wait must be in order as above
-            // west wait
-            if (ry > 0) 
-            {
-                MPI_Wait(&recv_request[0], &recv_status[0]);
-                MPI_Wait(&send_request[0], &send_status[0]);
-            }
-            // east wait
-            if (ry < py-1) 
-            {
-                MPI_Wait(&send_request[1], &send_status[1]);
-                MPI_Wait(&recv_request[1], &recv_status[1]);
-            }
-
-            // north wait
-            if (rx >0) 
-            {
-                MPI_Wait(&send_request[2], &send_status[2]);
-                MPI_Wait(&recv_request[2], &recv_status[2]);
-            }
-
-            // south wait
-            if (rx < px-1) 
-            {
-                MPI_Wait(&recv_request[3], &recv_status[3]);
-                MPI_Wait(&send_request[3], &send_status[3]);
-            }
-
-            // west fill
             if (ry == 0 )
             {
                 for (index = 0; index < rows * cols; index+=cols) 
@@ -423,149 +310,79 @@ void solve_MPI(double **_E, double **_E_prev, double *R, double alpha, double dt
                     E_prev[index] = E_prev[index+2];
                 }
             }
-            else
-            {
-                for (index = 0; index < rows * cols; index+=cols) 
-                {
-                    E_prev[index] = recv_west_ghost[index/cols];
-                }
-
-            }
-
-            // east fill
             if (ry==py-1)
-            {
-                for (index = cols-1; index < rows * cols; index+= cols) 
                 {
-                    E_prev[index] = E_prev[index-2];
+                    for (index = cols-1; index < rows * cols; index+= cols) 
+                    {
+                        E_prev[index] = E_prev[index-2];
+                    }
                 }
-            }
-            else
-            {
-                for (index = cols-1; index < rows * cols; index+=cols) 
-                {
-                    E_prev[index] = recv_east_ghost[(index -cols +1)/cols];
-                }
-            }
-
             // north fill
             if (rx == 0)
-            {
-                for (index = 0; index < cols; index++) 
                 {
-                    E_prev[index] = E_prev[index + 2*cols];
-                }
-            }// else received 
+                    for (index = 0; index < cols; index++) 
+                    {
+                        E_prev[index] = E_prev[index + 2*cols];
+                    }
+                }// else received 
 
             // south fill
             if (rx == px-1)
-            {
-                for (index = rows * cols - cols; index < rows * cols; index++) 
                 {
-                    E_prev[index] = E_prev[index - cols*2];
-                }
-            }//else received
-      }
-#ifdef FUSED
-    // Solve for the excitation, a PDE
-    for(j = innerBlockRowStartIndex; j <= innerBlockRowEndIndex; j+=cols)
-    {
-        E_tmp = E + j;
-	    E_prev_tmp = E_prev + j;
-        R_tmp = R + j;
-	    for(i = 0; i < (cols-2)-(cols-2)%STEP; i+=STEP) 
-        {
-            #ifdef SSE_VEC
-                __m128d EC_avx = _mm_loadu_pd(&E_prev_tmp[i]); //current
-                __m128d ET_avx = _mm_loadu_pd(&E_prev_tmp[i - cols]); //top
-                __m128d EB_avx = _mm_loadu_pd(&E_prev_tmp[i + cols]); //bottom
-                __m128d EL_avx = _mm_loadu_pd(&E_prev_tmp[i - 1]); //left
-                __m128d ER_avx = _mm_loadu_pd(&E_prev_tmp[i + 1]); //right
-                __m128d E_avx = _mm_add_pd(EC_avx, _mm_mul_pd(alpha_avx,
-                            _mm_sub_pd(_mm_add_pd(_mm_add_pd(ET_avx, EB_avx), _mm_add_pd(EL_avx, ER_avx)), _mm_mul_pd(four_avx, EC_avx))));
-                __m128d R_avx = _mm_loadu_pd(&R_tmp[i]);
-                E_avx = _mm_sub_pd(E_avx, _mm_mul_pd(dt_avx,_mm_add_pd(_mm_mul_pd(EC_avx, R_avx),
-                        _mm_mul_pd(_mm_mul_pd(_mm_sub_pd(EC_avx, a_avx),_mm_sub_pd(EC_avx, one_avx)),_mm_mul_pd(kk_avx, EC_avx)))));
-                R_avx = _mm_add_pd(R_avx,_mm_mul_pd(dt_avx,_mm_mul_pd(_mm_add_pd(epsilon_avx,
-                        _mm_div_pd(_mm_mul_pd(M1_avx, R_avx), _mm_add_pd(EC_avx, M2_avx))), _mm_sub_pd(_mm_mul_pd(minus_avx, R_avx),
-                        _mm_mul_pd(kk_avx, _mm_mul_pd(EC_avx, _mm_sub_pd(EC_avx, _mm_add_pd(b_avx, one_avx))))))));
-                _mm_storeu_pd(&E_tmp[i], E_avx);
-                _mm_storeu_pd(&R_tmp[i], R_avx);
-            #else
-                E_tmp[i] = E_prev_tmp[i]+alpha*(E_prev_tmp[i+1]+E_prev_tmp[i-1]-4*E_prev_tmp[i]+E_prev_tmp[i+cols]+E_prev_tmp[i-cols]);
-                E_tmp[i] += -dt*(kk*E_prev_tmp[i]*(E_prev_tmp[i]-a)*(E_prev_tmp[i]-1)+E_prev_tmp[i]*R_tmp[i]);
-                R_tmp[i] += dt*(epsilon+M1* R_tmp[i]/( E_prev_tmp[i]+M2))*(-R_tmp[i]-kk*E_prev_tmp[i]*(E_prev_tmp[i]-b-1));
-            #endif
-        }
-        for (i=(cols-2)-(cols-2)%STEP; i<cols-2; i++)
-        {
-            E_tmp[i] = E_prev_tmp[i]+alpha*(E_prev_tmp[i+1]+E_prev_tmp[i-1]-4*E_prev_tmp[i]+E_prev_tmp[i+cols]+E_prev_tmp[i-cols]);
-            E_tmp[i] += -dt*(kk*E_prev_tmp[i]*(E_prev_tmp[i]-a)*(E_prev_tmp[i]-1)+E_prev_tmp[i]*R_tmp[i]);
-            R_tmp[i] += dt*(epsilon+M1* R_tmp[i]/( E_prev_tmp[i]+M2))*(-R_tmp[i]-kk*E_prev_tmp[i]*(E_prev_tmp[i]-b-1));
-        }
-    }
-#else
-    // Solve for the excitation, a PDE
-    for(j = innerBlockRowStartIndex; j <= innerBlockRowEndIndex; j+=cols) 
-    {
-        E_tmp = E + j;
-        E_prev_tmp = E_prev + j;
-        for(i = 0; i < (cols-2)-(cols-2)%STEP; i+=STEP) 
-        {
-            #ifdef SSE_VEC
-                __m128d EC_avx = _mm_loadu_pd(&E_prev_tmp[i]);
-                __m128d ET_avx = _mm_loadu_pd(&E_prev_tmp[i - cols]);
-                __m128d EB_avx = _mm_loadu_pd(&E_prev_tmp[i + cols]);
-                __m128d EL_avx = _mm_loadu_pd(&E_prev_tmp[i - 1]);
-                __m128d ER_avx = _mm_loadu_pd(&E_prev_tmp[i + 1]);
-                __m128d E_avx = _mm_add_pd(EC_avx, _mm_mul_pd(alpha_avx, _mm_sub_pd(_mm_add_pd(_mm_add_pd(ET_avx, EB_avx),
-                                        _mm_add_pd(EL_avx, ER_avx)), _mm_mul_pd(four_avx, EC_avx))));
-            _mm_storeu_pd(&E_tmp[i], E_avx);
-            #else
-                E_tmp[i] = E_prev_tmp[i]+alpha*(E_prev_tmp[i+1]+E_prev_tmp[i-1]-4*E_prev_tmp[i]+E_prev_tmp[i+cols]+E_prev_tmp[i-cols]);
-            #endif
-        }
-        for (i= (cols-2)-(cols-2)%STEP; i<cols-2; i++)
-        {
-            E_tmp[i] = E_prev_tmp[i]+alpha*(E_prev_tmp[i+1]+E_prev_tmp[i-1]-4*E_prev_tmp[i]+E_prev_tmp[i+cols]+E_prev_tmp[i-cols]);
-        }
-    }
-    /* 
-     * Solve the ODE, advancing excitation and recovery variables
-     *     to the next timtestep
-     */
+                    for (index = rows * cols - cols; index < rows * cols; index++) 
+                    {
+                        E_prev[index] = E_prev[index - cols*2];
+                    }
+                }//else received
 
-    for(j = innerBlockRowStartIndex; j <= innerBlockRowEndIndex; j+=cols) 
-    {
-        E_tmp = E + j;
-        R_tmp = R + j;
-	    E_prev_tmp = E_prev + j;
-        for(i = 0; i < (cols-2)-(cols-2)%STEP; i+=STEP) 
-        {
-            #ifdef SSE_VEC
-                __m128d E_avx = _mm_loadu_pd(&E_tmp[i]);
-                __m128d EC_avx = _mm_loadu_pd(&E_prev_tmp[i]);
-                __m128d R_avx = _mm_loadu_pd(&R_tmp[i]);
-                E_avx = _mm_sub_pd(E_avx,_mm_mul_pd(dt_avx,_mm_add_pd(_mm_mul_pd(EC_avx, R_avx),
-                _mm_mul_pd(_mm_mul_pd(_mm_sub_pd(EC_avx, a_avx),_mm_sub_pd(EC_avx, one_avx)),_mm_mul_pd(kk_avx, EC_avx)))));
-                R_avx = _mm_add_pd(R_avx,_mm_mul_pd(dt_avx,_mm_mul_pd(_mm_add_pd(epsilon_avx,_mm_div_pd(_mm_mul_pd(M1_avx, R_avx),
-                                    _mm_add_pd(EC_avx, M2_avx))),_mm_sub_pd(_mm_mul_pd(minus_avx, R_avx),
-                                    _mm_mul_pd(kk_avx,_mm_mul_pd(EC_avx,_mm_sub_pd(EC_avx, _mm_add_pd(b_avx, one_avx))))))));
-                _mm_storeu_pd(&E_tmp[i], E_avx);
-                _mm_storeu_pd(&R_tmp[i], R_avx);
-            #else
-                E_tmp[i] += -dt*(kk*E_prev_tmp[i]*(E_prev_tmp[i]-a)*(E_prev_tmp[i]-1)+E_prev_tmp[i]*R_tmp[i]);
-                R_tmp[i] += dt*(epsilon+M1* R_tmp[i]/( E_prev_tmp[i]+M2))*(-R_tmp[i]-kk*E_prev_tmp[i]*(E_prev_tmp[i]-b-1));
-            #endif
+        //do computation while sending and receiving            
+
+            #pragma prefetch
+            for(j = innerBlockRowStartIndex+1+cols; j <= innerBlockRowEndIndex+1-cols; j+=cols) 
+            {
+                E_tmp = E + j;
+                E_prev_tmp = E_prev + j;
+                #pragma prefetch
+                for(i = 0; i < (cols-4); i++) 
+                {          
+                        E_tmp[i] = E_prev_tmp[i]+alpha*(E_prev_tmp[i+1]+E_prev_tmp[i-1]-4*E_prev_tmp[i]+E_prev_tmp[i+cols]+E_prev_tmp[i-cols]);
+                }
+                
+            }
+            /* 
+            * Solve the ODE, advancing excitation and recovery variables
+            *     to the next timtestep
+            */
+            #pragma prefetch
+            for(j = innerBlockRowStartIndex+1+cols; j <= innerBlockRowEndIndex+1-cols; j+=cols) 
+            {
+                E_tmp = E + j;
+                R_tmp = R + j;
+                E_prev_tmp = E_prev + j;
+                #pragma prefetch
+                for(i = 0; i < (cols-4); i++) 
+                {
+                        E_tmp[i] += -dt*(kk*E_prev_tmp[i]*(E_prev_tmp[i]-a)*(E_prev_tmp[i]-1)+E_prev_tmp[i]*R_tmp[i]);
+                        R_tmp[i] += dt*(epsilon+M1* R_tmp[i]/( E_prev_tmp[i]+M2))*(-R_tmp[i]-kk*E_prev_tmp[i]*(E_prev_tmp[i]-b-1));
+                }
+            }
+            
+            //wait must be in order as above
+            
+            MPI_Waitall(count+1,recv_request,recv_status);
+            //MPI_Waitall(count+1,send_request,send_status);
+    
+            solve_ghost(innerBlockRowStartIndex, 2*cols-2,cols,cols-2, E_tmp,R_tmp, E_prev_tmp, E ,R,  E_prev,dt,alpha);
+      
+            solve_ghost(innerBlockRowEndIndex, rows*cols-cols-2 ,cols, cols-2,E_tmp,R_tmp, E_prev_tmp, E ,R,  E_prev,dt,alpha);
+        
+            solve_ghost(innerBlockRowStartIndex+cols, innerBlockRowEndIndex-cols,cols,1,E_tmp, R_tmp, E_prev_tmp,E ,R, E_prev, dt,alpha);
+                  
+            solve_ghost(3*cols-2, rows*cols-2*cols-2,cols,1,E_tmp, R_tmp, E_prev_tmp,E ,R, E_prev,dt,alpha);
+       
         }
-        for (i= (cols-2)-(cols-2)%STEP; i<cols-2; i++)
-        {
-            E_tmp[i] += -dt*(kk*E_prev_tmp[i]*(E_prev_tmp[i]-a)*(E_prev_tmp[i]-1)+E_prev_tmp[i]*R_tmp[i]);
-            R_tmp[i] += dt*(epsilon+M1* R_tmp[i]/( E_prev_tmp[i]+M2))*(-R_tmp[i]-kk*E_prev_tmp[i]*(E_prev_tmp[i]-b-1));
-        }
-    }
-#endif       
-/////////////////////////////////////////////////////////////////////////////////
+      
+        /////////////////////////////////////////////////////////////////////////////////
 
         if (cb.stats_freq)
         {
@@ -637,6 +454,7 @@ void solve_MPI(double **_E, double **_E_prev, double *R, double alpha, double dt
     } //end of 'niter' loop at the beginning
 
   //  printMat2("Rank 0 Matrix E_prev", E_prev, m,n);  // return the L2 and infinity norms via in-out parameters
+    MPI_Type_free(&vec_t);
     stats(E_prev,rows-2,cols-2,&Linf,&sumSq);
     if (noComm)
     {
@@ -664,25 +482,4 @@ void solve(double **_E, double **_E_prev, double *R, double alpha, double dt, Pl
 #else
   solve_single(_E ,_E_prev, R, alpha, dt, plotter, L2, Linf);
 #endif
-}
-
-void printMat2(const char mesg[], double *E, int m, int n){
-    int i;
-#if 0
-    if (m>8)
-      return;
-#else
-    if (m>34)
-      return;
-#endif
-    printf("%s\n",mesg);
-    for (i=0; i < (m+2)*(n+2); i++){
-       int rowIndex = i / (n+2);
-       int colIndex = i % (n+2);
-       if ((colIndex>0) && (colIndex<n+1))
-          if ((rowIndex > 0) && (rowIndex < m+1))
-            printf("%6.3f ", E[i]);
-       if (colIndex == n+1)
-	    printf("\n");
-    }
 }

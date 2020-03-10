@@ -25,6 +25,7 @@ void printMat(const char mesg[], double *E, int m, int n);
 double *alloc1D(int m,int n);
 extern control_block cb;
 
+
 //
 // Initialization
 //
@@ -66,7 +67,8 @@ void init (double *E,double *E_prev,double *R,int m,int n){
     #endif
 
 #ifdef _MPI_
-    int px=cb.px, py=cb.py; //
+    // in our code, x is the row, y is the column, but in the command line, x is the column, y is the row, so swap here
+    int py=cb.px, px=cb.py; 
     int nprocs, myrank, rx, ry, rows, cols;
     MPI_Comm_size(MPI_COMM_WORLD,&nprocs);
     MPI_Comm_rank(MPI_COMM_WORLD,&myrank);
