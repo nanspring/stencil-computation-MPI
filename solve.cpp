@@ -18,7 +18,7 @@ using namespace std;
 
 #define FUSED 0
 
-#define BLOCK_SIZE 32
+#define BLOCK_SIZE 36
 
 #define ROW(rx, px, m) (rx < (px -(m%px)) ? m/px : m/px + 1) //get number of rows in the block
 #define COLUMN(ry, py, n) (ry < (py - (m%py)) ? m/py : m/py + 1) // get number of columns in the block
