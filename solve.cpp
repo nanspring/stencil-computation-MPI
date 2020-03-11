@@ -365,6 +365,10 @@ void solve_MPI(double **_E, double **_E_prev, double *R, double alpha, double dt
             #pragma prefetch
             for(j =1; j <= (rows-4)-(rows-4)%BLOCK_SIZE; j+=BLOCK_SIZE) 
             {
+                #ifdef AVX_VEC
+                    #pragma ivdep
+                #endif
+                #pragma prefetch
                 for(k=0; k<BLOCK_SIZE; k++)
                 {
                     E_tmp = E + innerBlockRowStartIndex+1 + (j+k)*cols;
@@ -383,7 +387,10 @@ void solve_MPI(double **_E, double **_E_prev, double *R, double alpha, double dt
 
                 }
             }
-
+            #ifdef AVX_VEC
+                    #pragma ivdep
+            #endif
+            #pragma unroll
             for(j =(rows-4)-(rows-4)%BLOCK_SIZE+1; j <= (rows-4); j++) 
             {
                 E_tmp = E + innerBlockRowStartIndex+1 + j*cols;
@@ -391,7 +398,7 @@ void solve_MPI(double **_E, double **_E_prev, double *R, double alpha, double dt
                 #ifdef AVX_VEC
                     #pragma ivdep
                 #endif
-                #pragma unroll
+                #pragma prefetch
                 for(i = 0; i < (cols-4); i++) 
                 {        
                     e_pre = E_prev_tmp[i];
@@ -411,6 +418,10 @@ void solve_MPI(double **_E, double **_E_prev, double *R, double alpha, double dt
             #pragma prefetch
             for(j =1; j <= (rows-4)-(rows-4)%BLOCK_SIZE; j+=BLOCK_SIZE) 
             {
+                #ifdef AVX_VEC
+                    #pragma ivdep
+                #endif
+                #pragma prefetch
                 for(k=0; k<BLOCK_SIZE; k++)
                 {
                     E_tmp = E + innerBlockRowStartIndex+1+ (j+k)*cols;
@@ -428,6 +439,10 @@ void solve_MPI(double **_E, double **_E_prev, double *R, double alpha, double dt
                     }
                 }
             }
+            #ifdef AVX_VEC
+                    #pragma ivdep
+            #endif
+            #pragma unroll
             for(j =(rows-4)-(rows-4)%BLOCK_SIZE +1; j <= (rows-4); j++) 
             {
                 E_tmp = E + innerBlockRowStartIndex+1+ j*cols;
@@ -436,7 +451,7 @@ void solve_MPI(double **_E, double **_E_prev, double *R, double alpha, double dt
                 #ifdef AVX_VEC
                     #pragma ivdep
                 #endif
-                #pragma unroll
+                #pragma prefetch
                 for(i = 0; i < (cols-4); i++) 
                 {
                     e_pre = E_prev_tmp[i], r_pre = R_tmp[i];
