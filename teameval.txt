@@ -1,7 +1,7 @@
                     CSE 260, Parallel Computation
                             (Winter 2019)
-           Department of Computer Science and Engineering 	
-                 University of California, San Diego 	
+           Department of Computer Science and Engineering 
+                 University of California, San Diego 
 
 
                Team Self Evaluation Form, Assignment #3
@@ -13,33 +13,41 @@ If you worked alone leave column B blank
 
 (1) List the names of your team members:
 
-A:
+A: Ansheng Xu
 
  
-B:
+B: Shaowei Liu
 
  
  
 (2) Estimate how much time each team member devoted to this project, in HOURS.
 
-  	                        A 	       B
-meetings 	  	  	 
-coding 	  	  	 
-writeup 	  	  	 
-planning (alone) 	  	  	 
-total (including meetings) 	  	  	 
+                           A         B
+meetings                   8         8
+coding                     15        15
+writeup                    10        10
+planning (alone)           4         4
+total (including meetings) 37        37
 
 
 (3) Discuss the following.
 (a) If you worked in a team, what were the major responsibilities
     of each team member?
+    Ansheng is responsible for doing optimization, wiritng code and report.
+    Shaoewi is resonisble for implementing MPI, doing optimzation and report.
 (b) Did you complete the assignment?
+    Yes, we did.
 (c) What were your major strengths and weaknesses in doing this
     assignment (individually or in a team)?
     If in a team, also discuss how your team worked together.
+    As a team, we work perfectly. We enjoy working with each other. The major
+strength is that we are good at coding, the weakness is that the git version is
+a little bit messed up. 
 (d) What  lessons did you learn from these events.
+    Teamwork is great for large project.
 (e) If in a team, whether and how you plan to change the way
     your work together .
+    No, we did it perfectly.
 (f) Anything else that comes to mind.
-
+    None.
 
